@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Data — NEVER commit personal chat data
+data/exports/
+data/profiles/
+data/db/
+
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# Editors
+.windsurf/
+.vscode/settings.json
+
+# Models / large files
+*.gguf
+*.bin
+*.safetensors
+
+project_state.txt

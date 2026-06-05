@@ -1,0 +1,23 @@
+# ── Core ──────────────────────────────────────────────
+pydantic>=2.0.0          # Data models — typed, validated
+python-dotenv            # Load .env variables safely
+
+# ── CLI / DX ──────────────────────────────────────────
+rich                     # Beautiful terminal output
+typer[all]               # CLI framework (built on Click)
+
+# ── LLM ───────────────────────────────────────────────
+ollama                   # Python client for your local Ollama
+
+# ── Embeddings (Phase 2 — install now, use later) ─────
+sentence-transformers    # Local text embeddings, no API needed
+
+# ── Vector DB (Phase 2 — install now, use later) ──────
+chromadb                 # Local vector store, SQLite-backed
+
+# ── Text utilities ────────────────────────────────────
+emoji                    # Emoji detection and analysis
+
+# ── Testing ───────────────────────────────────────────
+pytest
+pytest-cov
