@@ -8,6 +8,7 @@ Usage:
     from brain.profiler.analyzer import build_profile
     profile = build_profile(records, user_name="Rishit")
 """
+from pathlib import Path
 import re
 from collections import Counter
 from brain.profiler.models import (
