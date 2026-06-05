@@ -357,3 +357,65 @@ def _group_by_contact(
             result[chat_name] = msgs
 
     return result
+
+
+# ── Profile persistence ───────────────────────────────────────────────────────
+
+def save_profile(profile: CommunicationProfile, path: str | Path) -> Path:
+    """
+    Save a CommunicationProfile to a JSON file.
+
+    Why JSON?
+    - Human readable — you can open it and verify it makes sense
+    - Pydantic serializes it cleanly (model_dump_json handles datetime, tuples, etc.)
+    - No database needed for Phase 1
+    - Easy to diff in git if you ever want to track profile evolution
+
+    Args:
+        profile: The profile to save
+        path:    Where to save it. Convention: data/profiles/{name}.json
+
+    Returns:
+        The resolved Path where the file was written
+    """
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
+    return out
+
+
+def load_profile(path: str | Path) -> CommunicationProfile:
+    """
+    Load a CommunicationProfile from a JSON file.
+
+    Args:
+        path: Path to the JSON file written by save_profile()
+
+    Returns:
+        CommunicationProfile with all fields restored
+
+    Raises:
+        FileNotFoundError: if the path doesn't exist
+        ValueError: if the file is not valid profile JSON
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(
+            f"Profile not found: {p}\n"
+            f"Run setup first: python cli/main.py setup <export_file> --you \"Your Name\""
+        )
+    try:
+        return CommunicationProfile.model_validate_json(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise ValueError(f"Could not parse profile at {p}: {e}") from e
+
+
+def profile_path(user_name: str, profiles_dir: str | Path = "data/profiles") -> Path:
+    """
+    Canonical path for a user's profile file.
+
+    Normalises the name (lowercase, spaces → underscores) so
+    'Rishit Sharma' and 'rishit sharma' resolve to the same file.
+    """
+    safe_name = user_name.lower().strip().replace(" ", "_")
+    return Path(profiles_dir) / f"{safe_name}.json"
