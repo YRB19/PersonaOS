@@ -231,9 +231,13 @@ def _get_file_stats() -> dict[str, dict]:
             docstring = "[SyntaxError — file unparseable]"
 
         # TODO / FIXME comments
-        for i, line in enumerate(lines, 1):
-            if any(marker in line.upper() for marker in ("TODO", "FIXME", "HACK", "XXX")):
-                todos.append(f"  line {i:>3}: {line.strip()}")
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("#") and any(
+                stripped.upper().startswith(f"# {m}") or stripped.upper().startswith(f"#{m}")
+                for m in ("TODO", "FIXME", "HACK", "XXX")
+            ):
+                todos.append(stripped)
 
         stats[rel_path] = {
             "exists": True,
