@@ -2,8 +2,7 @@
 
 > A privacy-first personal communication brain that learns how you communicate.
 
-Notion<img width="468" height="50" alt="image" src="https://github.com/user-attachments/assets/36d0d7b9-576d-4fe1-aeae-e64957214e6c" />
-
+[Notion]([url](https://app.notion.com/p/PersonaOS-376e9284616580869547f38f4a88fd46?source=copy_link))
 
 **Status: Phase 1 — in development**
 
