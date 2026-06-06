@@ -3,10 +3,12 @@ PersonaOS CLI
 Usage: python -m cli.main [COMMAND] [OPTIONS]
 
 Commands:
-    setup   Parse one or more exports (or a directory) and save a merged profile
-    profile Show a saved profile with relationship breakdown
-    parse   Parse an export and show raw stats (no profile saved)
-    check   Verify environment and dependencies
+    setup    Parse one or more exports (or a directory) and save a merged profile
+    profile  Show a saved profile with relationship breakdown
+    parse    Parse an export and show raw stats (no profile saved)
+    signals  Show detailed relationship signal breakdown for each contact
+    summary  Generate a natural language summary using Ollama
+    check    Verify environment and dependencies
 """
 import sys
 from pathlib import Path
@@ -268,6 +270,200 @@ def parse(
     console.print(table)
 
 
+# ── signals ────────────────────────────────────────────────────────────────────
+
+@app.command()
+def signals(
+    file: str = typer.Argument(..., help="Chat export to inspect"),
+    you: str = typer.Option(..., "--you", "-u", help="Your sender name"),
+    contact: str = typer.Option("", "--contact", "-c",
+                                help="Show breakdown for one contact only"),
+):
+    """
+    Show the full relationship signal breakdown for every contact in an export.
+
+    Displays which specific words triggered each relationship category
+    and the confidence score for each. Useful for validating and
+    calibrating the classifier against real data.
+
+    Example:
+        python -m cli.main signals "data/exports/chat.txt" --you "Rishit Babbar"
+        python -m cli.main signals "data/exports/chat.txt" --you "Rishit Babbar" --contact "Dhaval Sethi"
+    """
+    from brain.profiler.classifier import get_all_scores
+    from brain.profiler.analyzer import _group_by_contact
+
+    file_path = Path(file)
+    if not file_path.exists():
+        console.print(f"\n[red]✗[/red]  File not found: {file}\n")
+        raise typer.Exit(1)
+
+    try:
+        records = _parse_file(file_path)
+    except Exception as e:
+        console.print(f"\n[red]✗[/red]  Parse error: {e}\n")
+        raise typer.Exit(1)
+
+    if not records:
+        console.print("\n[yellow]⚠[/yellow]  No messages parsed.\n")
+        raise typer.Exit(1)
+
+    contact_groups = _group_by_contact(records, you)
+
+    if contact and contact not in contact_groups:
+        console.print(
+            f"\n[red]✗[/red]  Contact '{contact}' not found. "
+            f"Available: {', '.join(contact_groups.keys())}\n"
+        )
+        raise typer.Exit(1)
+
+    groups_to_show = (
+        {contact: contact_groups[contact]}
+        if contact else contact_groups
+    )
+
+    for contact_name, contact_records in groups_to_show.items():
+        user_msgs = [r for r in contact_records if r.sender == you]
+        if len(user_msgs) < 5:
+            continue
+
+        console.print()
+        console.print(Panel(
+            f"[bold]{contact_name}[/bold]  "
+            f"[dim]{len(user_msgs)} messages from {you}[/dim]",
+            style="blue",
+        ))
+
+        all_scores = get_all_scores(user_msgs, contact_records)
+
+        if not all_scores:
+            console.print("  [dim]Insufficient data for classification[/dim]")
+            continue
+
+        TYPE_COLOURS = {
+            "close_friend": "green", "academic_peer": "blue",
+            "family": "magenta", "colleague": "yellow",
+            "romantic_interest": "red", "acquaintance": "dim",
+        }
+
+        for rel_type, (conf, rel_signals) in all_scores.items():
+            colour = TYPE_COLOURS.get(rel_type, "white")
+            bar = "█" * int(conf * 20)
+            console.print(
+                f"\n  [{colour}]{rel_type:<20}[/{colour}]  "
+                f"[bold]{conf:.0%}[/bold]  [dim]{bar}[/dim]"
+            )
+            for sig in rel_signals:
+                console.print(f"    [dim]→[/dim] {sig}")
+
+        # Show winning classification
+        best_type, best_conf = max(
+            ((t, c) for t, (c, _) in all_scores.items()),
+            key=lambda x: x[1],
+        )
+        console.print(
+            f"\n  [bold]→ Classified as:[/bold] "
+            f"[{TYPE_COLOURS.get(best_type, 'white')}]{best_type}[/{TYPE_COLOURS.get(best_type, 'white')}]"
+            f"  ({best_conf:.0%} confidence)"
+        )
+
+    console.print()
+
+
+# ── summary ────────────────────────────────────────────────────────────────────
+
+@app.command()
+def summary(
+    you: str = typer.Argument(..., help="Name used when running setup"),
+    model: str = typer.Option("qwen3.5:9b", "--model", "-m",
+                              help="Ollama model to use"),
+    profiles_dir: str = typer.Option("data/profiles", "--dir", "-d"),
+):
+    """
+    Generate a natural language summary of your communication profile using Ollama.
+
+    This is the first LLM step in PersonaOS. Ollama must be running:
+        ollama serve
+
+    The summary is saved back into the profile JSON.
+
+    Example:
+        python -m cli.main summary "Rishit Babbar"
+        python -m cli.main summary "Rishit Babbar" --model mistral
+    """
+    from brain.profiler.analyzer import load_profile, profile_path
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    p = profile_path(you, profiles_dir)
+    try:
+        prof = load_profile(p)
+    except FileNotFoundError as e:
+        console.print(f"\n[red]✗[/red] {e}\n")
+        raise typer.Exit(1)
+
+    console.print()
+    console.print(Panel(
+        f"[bold]Generating summary for {you}[/bold]\n"
+        f"[dim]Model: {model}  |  Make sure Ollama is running: ollama serve[/dim]",
+        style="blue",
+    ))
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task = progress.add_task(f"Asking {model}...", total=None)
+        try:
+            # Import here to avoid import errors if Ollama not needed
+            import ollama
+            
+            # Build prompt from profile
+            style = prof.global_style
+            prompt = f"""
+Based on this communication profile, write a 2-3 sentence natural language summary:
+
+Name: {you}
+Total messages analyzed: {prof.total_messages_analyzed}
+Number of relationships: {len(prof.relationships)}
+
+Writing style:
+- Average message length: {style.avg_message_length:.0f} characters
+- Common openers: {', '.join(style.common_openers[:3])}
+- Slang tokens: {', '.join(style.slang_tokens[:3])}
+- Typing quirks: {', '.join(style.typing_quirks[:2]) if style.typing_quirks else 'none'}
+
+Top 3 relationships:
+{chr(10).join([f"- {r.contact_name}: {r.relationship_type} ({r.relationship_confidence:.0%} confidence)" for r in prof.relationships[:3]])}
+
+Write a brief, human-readable summary of this person's communication style and key relationships.
+            """.strip()
+            
+            response = ollama.generate(
+                model=model,
+                prompt=prompt,
+                stream=False,
+            )
+            
+            result = response.get("response", "").strip()
+            progress.update(task, description="Done.")
+            
+            if not result:
+                raise RuntimeError(f"Empty response from {model}")
+        except Exception as e:
+            console.print(f"\n[red]✗[/red] {e}\n")
+            console.print("[dim]Make sure Ollama is running: ollama serve[/dim]\n")
+            raise typer.Exit(1)
+
+    console.print()
+    console.print(Panel(
+        f"[bold green]{result}[/bold green]",
+        title="Communication Summary",
+        style="green",
+    ))
+    console.print("[dim]  (Summary not persisted in this version)[/dim]\n")
+
+
 # ── check ──────────────────────────────────────────────────────────────────────
 
 @app.command()
@@ -287,8 +483,8 @@ def _print_profile_summary(profile, name: str):
     """Print a styled summary of a CommunicationProfile."""
 
     # ── Sources ────────────────────────────────────────────────────────────────
-    if profile.sources:
-        console.print(f"\n  [dim]Built from:[/dim] {', '.join(profile.sources)}")
+    if profile.sources_analyzed:
+        console.print(f"\n  [dim]Built from:[/dim] {', '.join(profile.sources_analyzed)}")
 
     # ── Global style ───────────────────────────────────────────────────────────
     style = profile.global_style
