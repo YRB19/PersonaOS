@@ -18,6 +18,7 @@ from brain.profiler.models import (
     StyleProfile,
     EmojiProfile,
 )
+from brain.profiler.classifier import classify_relationship
 
 try:
     import emoji as emoji_lib
@@ -51,26 +52,27 @@ def build_profile(
     records: list[MessageRecord],
     user_name: str,
     platform: str = "",
+    sources: list[str] | None = None,
 ) -> CommunicationProfile:
     """
     Build a full CommunicationProfile for `user_name` from parsed message records.
 
     Args:
-        records:   All messages from a chat export (multiple senders OK)
+        records:   ALL messages from ALL chat exports combined (multiple senders OK)
         user_name: The sender name to profile (as it appears in the export)
-        platform:  "whatsapp" | "telegram" | etc. (inferred from records if empty)
+        platform:  "whatsapp" | "telegram" | etc. Inferred from records if empty.
+        sources:   List of filenames this profile was built from (for audit trail)
 
     Returns:
         CommunicationProfile with global style + per-contact breakdown
+        + relationship type inference for each contact.
     """
     if not records:
         raise ValueError("No records provided.")
 
-    # Infer platform if not supplied
     if not platform:
         platform = records[0].platform
 
-    # Split: user's messages vs everyone else
     user_msgs = [r for r in records if r.sender == user_name]
     if not user_msgs:
         raise ValueError(
@@ -78,32 +80,41 @@ def build_profile(
             f"Senders in this export: {sorted({r.sender for r in records})}"
         )
 
-    # Global style across ALL of the user's messages
     global_style = _extract_style(user_msgs)
     global_emoji = _extract_emoji_profile(user_msgs)
 
-    # Per-contact profiles
     contacts = _group_by_contact(records, user_name)
     relationships = []
+
     for contact_name, contact_records in contacts.items():
         your_msgs_in_chat = [r for r in contact_records if r.sender == user_name]
         if len(your_msgs_in_chat) < 5:
-            continue  # not enough data to profile
+            continue
+
+        # ── Classify relationship type ────────────────────────────────────────
+        rel_type, confidence, rel_signals = classify_relationship(
+            user_messages=your_msgs_in_chat,
+            all_messages=contact_records,
+        )
+
         rel = RelationshipProfile(
             contact_name=contact_name,
             message_count=len(your_msgs_in_chat),
             style=_extract_style(your_msgs_in_chat),
             emoji_usage=_extract_emoji_profile(your_msgs_in_chat),
             tone_notes=_extract_tone_notes(your_msgs_in_chat),
+            relationship_type=rel_type,
+            relationship_confidence=confidence,
+            relationship_signals=rel_signals,
         )
         relationships.append(rel)
 
-    # Sort relationships by message count descending
     relationships.sort(key=lambda r: r.message_count, reverse=True)
 
     return CommunicationProfile(
         platform=platform,
         total_messages_analyzed=len(user_msgs),
+        sources_analyzed=sources or [],
         global_style=global_style,
         global_emoji=global_emoji,
         relationships=relationships,
@@ -416,7 +427,7 @@ def profile_path(user_name: str, profiles_dir: str | Path = "data/profiles") -> 
     Canonical path for a user's profile file.
 
     Normalises the name (lowercase, spaces → underscores) so
-    'Rishit Sharma' and 'rishit sharma' resolve to the same file.
+    'Rishit Babbar' and 'rishit babbar' resolve to the same file.
     """
     safe_name = user_name.lower().strip().replace(" ", "_")
     return Path(profiles_dir) / f"{safe_name}.json"

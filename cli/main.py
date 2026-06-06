@@ -1,11 +1,11 @@
 """
-PersonaOS CLI — Phase 1 development tool.
-Usage: python cli/main.py [COMMAND] [OPTIONS]
+PersonaOS CLI
+Usage: python -m cli.main [COMMAND] [OPTIONS]
 
 Commands:
-    setup   Full onboarding pipeline: parse → analyze → save profile
-    parse   Parse an export and show stats (no profile saved)
-    profile Show a saved profile
+    setup   Parse one or more exports (or a directory) and save a merged profile
+    profile Show a saved profile with relationship breakdown
+    parse   Parse an export and show raw stats (no profile saved)
     check   Verify environment and dependencies
 """
 import sys
@@ -23,33 +23,91 @@ app = typer.Typer(
 console = Console()
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _resolve_export_files(paths: list[str]) -> list[Path]:
+    """
+    Accepts:
+      - A single directory  → returns all .txt and .json files inside
+      - One or more files   → returns those files directly
+      - A glob pattern      → let typer/shell expand it (already in paths)
+
+    Raises typer.Exit if nothing found.
+    """
+    resolved: list[Path] = []
+
+    for p_str in paths:
+        p = Path(p_str)
+        if p.is_dir():
+            found = list(p.glob("*.txt")) + list(p.glob("*.json"))
+            if not found:
+                console.print(f"\n[yellow]⚠[/yellow]  No .txt or .json files found in {p}\n")
+            resolved.extend(found)
+        elif p.exists():
+            resolved.append(p)
+        else:
+            console.print(f"\n[red]✗[/red]  File not found: {p}\n")
+
+    if not resolved:
+        console.print("[red]✗[/red]  No export files found. Check your paths.\n")
+        raise typer.Exit(1)
+
+    return resolved
+
+
+def _parse_file(path: Path, chat_name: str = "") -> list:
+    """Parse a single export file. Returns list of MessageRecord."""
+    ext = path.suffix.lower()
+    if ext == ".txt":
+        from brain.profiler.parsers.whatsapp import parse_whatsapp_export
+        return parse_whatsapp_export(path, chat_name=chat_name)
+    elif ext == ".json":
+        from brain.profiler.parsers.telegram import parse_telegram_export
+        return parse_telegram_export(path, chat_name=chat_name)
+    else:
+        console.print(f"[yellow]⚠[/yellow]  Skipping {path.name} — unknown format ({ext})")
+        return []
+
+
 # ── setup ──────────────────────────────────────────────────────────────────────
 
 @app.command()
 def setup(
-    file: str = typer.Argument(..., help="Path to WhatsApp .txt or Telegram .json export"),
-    you: str = typer.Option(..., "--you", "-u", help="Your name as it appears in the export"),
-    chat: str = typer.Option("", "--chat", "-c", help="Chat name override (defaults to filename)"),
+    paths: list[str] = typer.Argument(
+        ...,
+        help="One or more export files, OR a directory containing exports. "
+             "Example: data/exports/ OR 'chat1.txt' 'chat2.txt'",
+    ),
+    you: str = typer.Option(..., "--you", "-u", help="Your name as it appears in the exports"),
     out: str = typer.Option("data/profiles", "--out", "-o", help="Directory to save profile"),
 ):
     """
-    Full Phase 1 pipeline: parse export → build style profile → save to disk.
+    Parse one or more chat exports and save a single merged profile.
 
-    This is the main command. Run it once per export file.
+    Pass a directory to process all exports at once:
+        python -m cli.main setup data/exports/ --you "Rishit Babbar"
 
-    Example:
-        python cli/main.py setup data/exports/priya.txt --you "Rishit"
+    Or pass specific files:
+        python -m cli.main setup chat1.txt chat2.txt --you "Rishit Babbar"
+
+    Running setup again on the same (or more) files regenerates the profile
+    from scratch. The profile is always built from the full corpus you provide.
     """
     from brain.profiler.analyzer import build_profile, save_profile, profile_path
     from rich.progress import Progress, SpinnerColumn, TextColumn
 
-    file_path = Path(file)
-    if not file_path.exists():
-        console.print(f"\n[red]✗[/red] File not found: {file}")
-        console.print("  Put your export in [bold]data/exports/[/bold] and try again.\n")
-        raise typer.Exit(1)
+    export_files = _resolve_export_files(paths)
 
-    ext = file_path.suffix.lower()
+    console.print()
+    console.print(Panel(
+        f"[bold]Setting up profile for:[/bold] {you}\n"
+        f"[dim]Processing {len(export_files)} file(s)[/dim]",
+        style="blue",
+    ))
+
+    all_records = []
+    sources = []
+    failed = []
 
     with Progress(
         SpinnerColumn(),
@@ -57,45 +115,58 @@ def setup(
         transient=True,
     ) as progress:
 
-        # ── Step 1: Parse ──────────────────────────────────────────────────────
-        task = progress.add_task("Parsing export...", total=None)
+        # ── Step 1: Parse all files ────────────────────────────────────────────
+        for export_file in export_files:
+            task = progress.add_task(f"Parsing {export_file.name}...", total=None)
+            try:
+                records = _parse_file(export_file)
+                if records:
+                    all_records.extend(records)
+                    sources.append(export_file.name)
+                    progress.update(task, description=f"✓ {export_file.name} — {len(records)} messages")
+                else:
+                    progress.update(task, description=f"⚠ {export_file.name} — 0 messages (skipped)")
+                    failed.append(export_file.name)
+            except Exception as e:
+                progress.update(task, description=f"✗ {export_file.name} — {e}")
+                failed.append(export_file.name)
 
-        try:
-            if ext == ".txt":
-                from brain.profiler.parsers.whatsapp import parse_whatsapp_export
-                records = parse_whatsapp_export(file_path, chat_name=chat)
-            elif ext == ".json":
-                from brain.profiler.parsers.telegram import parse_telegram_export
-                records = parse_telegram_export(file_path, chat_name=chat)
-            else:
-                console.print(f"\n[red]✗[/red] Unknown format: {ext}. Use .txt (WhatsApp) or .json (Telegram).\n")
-                raise typer.Exit(1)
-        except Exception as e:
-            console.print(f"\n[red]✗ Parse failed:[/red] {e}\n")
+        if not all_records:
+            console.print("\n[red]✗[/red]  No messages parsed from any file. Check export formats.\n")
             raise typer.Exit(1)
 
-        progress.update(task, description=f"Parsed {len(records)} messages. Building profile...")
-
-        # ── Step 2: Build profile ──────────────────────────────────────────────
+        # ── Step 2: Build merged profile ───────────────────────────────────────
+        task = progress.add_task(
+            f"Building profile from {len(all_records):,} messages...",
+            total=None,
+        )
         try:
-            profile = build_profile(records, user_name=you)
+            profile = build_profile(
+                all_records,
+                user_name=you,
+                sources=sources,
+            )
         except ValueError as e:
             console.print(f"\n[red]✗ Profile build failed:[/red] {e}\n")
             raise typer.Exit(1)
 
-        progress.update(task, description="Saving profile...")
-
         # ── Step 3: Save ───────────────────────────────────────────────────────
+        progress.update(task, description="Saving profile...")
         dest = save_profile(profile, profile_path(you, out))
-        progress.update(task, description="Done.")
 
-    # ── Print summary ──────────────────────────────────────────────────────────
+    # ── Summary ────────────────────────────────────────────────────────────────
     console.print()
     console.print(Panel(
-        f"[bold green]✓ Profile built for {you}[/bold green]",
-        subtitle=f"Saved → {dest}",
+        f"[bold green]✓ Profile saved for {you}[/bold green]\n"
+        f"[dim]{len(all_records):,} messages · "
+        f"{len(profile.relationships)} contacts · "
+        f"{len(sources)} files merged[/dim]",
+        subtitle=str(dest),
         style="green",
     ))
+
+    if failed:
+        console.print(f"[yellow]⚠[/yellow]  {len(failed)} file(s) skipped: {', '.join(failed)}")
 
     _print_profile_summary(profile, you)
 
@@ -108,10 +179,10 @@ def profile(
     profiles_dir: str = typer.Option("data/profiles", "--dir", "-d"),
 ):
     """
-    Display a saved communication profile.
+    Display a saved communication profile with relationship breakdown.
 
     Example:
-        python cli/main.py profile "Rishit"
+        python -m cli.main profile "Rishit Babbar"
     """
     from brain.profiler.analyzer import load_profile, profile_path
 
@@ -127,69 +198,56 @@ def profile(
     _print_profile_summary(prof, you)
 
 
-# ── parse (raw stats, no profile saved) ───────────────────────────────────────
+# ── parse ──────────────────────────────────────────────────────────────────────
 
 @app.command()
 def parse(
     file: str = typer.Argument(..., help="Path to WhatsApp .txt or Telegram .json export"),
-    you: str = typer.Option("", "--you", "-u", help="Highlight your messages (optional)"),
+    you: str = typer.Option("", "--you", "-u", help="Highlight your messages"),
     chat: str = typer.Option("", "--chat", "-c", help="Chat name override"),
 ):
     """
-    Parse a chat export and show statistics. Does not save a profile.
-
-    Useful for exploring an export before committing to full setup.
+    Parse a single chat export and show raw statistics.
+    Does not save a profile — use setup for that.
 
     Example:
-        python cli/main.py parse data/exports/priya.txt
+        python -m cli.main parse data/exports/chat.txt --you "Rishit Babbar"
     """
     file_path = Path(file)
     if not file_path.exists():
-        console.print(f"\n[red]✗[/red] File not found: {file}\n")
+        console.print(f"\n[red]✗[/red]  File not found: {file}\n")
         raise typer.Exit(1)
 
-    ext = file_path.suffix.lower()
     try:
-        if ext == ".txt":
-            from brain.profiler.parsers.whatsapp import parse_whatsapp_export
-            records = parse_whatsapp_export(file_path, chat_name=chat)
-        elif ext == ".json":
-            from brain.profiler.parsers.telegram import parse_telegram_export
-            records = parse_telegram_export(file_path, chat_name=chat)
-        else:
-            console.print(f"\n[red]✗[/red] Unknown format: {ext}\n")
-            raise typer.Exit(1)
+        records = _parse_file(file_path, chat_name=chat)
     except Exception as e:
         console.print(f"\n[red]✗ Parse error:[/red] {e}\n")
         raise typer.Exit(1)
 
     if not records:
-        console.print("\n[yellow]⚠ No messages parsed.[/yellow] Check the file format.\n")
+        console.print("\n[yellow]⚠[/yellow]  No messages parsed. Check the file format.\n")
         raise typer.Exit(1)
 
     console.print()
-    console.print(Panel(f"[bold]{file_path.name}[/bold] — {len(records)} messages", style="blue"))
+    console.print(Panel(
+        f"[bold]{file_path.name}[/bold]  —  {len(records):,} messages",
+        style="blue",
+    ))
 
-    # Date range
     console.print(
-        f"  Date range:   [cyan]{records[0].timestamp.date()}[/cyan]"
+        f"  Date range:  [cyan]{records[0].timestamp.date()}[/cyan]"
         f"  →  [cyan]{records[-1].timestamp.date()}[/cyan]"
     )
 
-    # Message counts
     if you:
         your_msgs = [r for r in records if r.sender == you]
-        console.print(f"  Your messages: [green]{len(your_msgs)}[/green] / {len(records)}")
-    else:
-        console.print(f"  Total:         [green]{len(records)}[/green]")
+        console.print(f"  Your msgs:   [green]{len(your_msgs):,}[/green] / {len(records):,}")
 
-    # Media + emoji
     media_count = sum(1 for r in records if r.has_media)
     emoji_count = sum(1 for r in records if r.has_emoji)
-    console.print(f"  With emoji:    {emoji_count}  ({emoji_count * 100 // len(records)}%)")
-    console.print(f"  Media:         {media_count}  ({media_count * 100 // len(records)}%)")
+    console.print(f"  With emoji:  {emoji_count:,}  ({emoji_count * 100 // len(records)}%)")
+    console.print(f"  Media:       {media_count:,}  ({media_count * 100 // len(records)}%)")
 
-    # Participants table
     senders: dict[str, int] = {}
     for r in records:
         senders[r.sender] = senders.get(r.sender, 0) + 1
@@ -204,7 +262,7 @@ def parse(
         pct = count * 100 // len(records)
         bar = "█" * (pct // 5)
         style = "green" if name == you else ""
-        table.add_row(name, str(count), f"{pct}%", bar, style=style)
+        table.add_row(name, f"{count:,}", f"{pct}%", bar, style=style)
 
     console.print()
     console.print(table)
@@ -223,10 +281,16 @@ def check():
     raise typer.Exit(result.returncode)
 
 
-# ── Internal helpers ───────────────────────────────────────────────────────────
+# ── Display helpers ────────────────────────────────────────────────────────────
 
 def _print_profile_summary(profile, name: str):
     """Print a styled summary of a CommunicationProfile."""
+
+    # ── Sources ────────────────────────────────────────────────────────────────
+    if profile.sources:
+        console.print(f"\n  [dim]Built from:[/dim] {', '.join(profile.sources)}")
+
+    # ── Global style ───────────────────────────────────────────────────────────
     style = profile.global_style
     emoji = profile.global_emoji
 
@@ -234,36 +298,70 @@ def _print_profile_summary(profile, name: str):
         console.print("  [yellow]No style data — not enough messages.[/yellow]")
         return
 
-    # ── Style table ────────────────────────────────────────────────────────────
-    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
-    table.add_column("Field", style="dim")
-    table.add_column("Value", style="bold")
+    console.print(f"\n  [bold]Global Style[/bold]  [dim]({profile.total_messages_analyzed:,} messages)[/dim]")
 
-    table.add_row("Messages analysed", str(profile.total_messages_analyzed))
-    table.add_row("Avg message length", f"{style.avg_message_length:.0f} chars")
-    table.add_row("Avg word count", f"{style.avg_word_count:.1f} words")
-    table.add_row("Lowercase heavy", "yes" if style.uses_lowercase_heavily else "no")
-    table.add_row("Uses punctuation", "yes" if style.uses_punctuation else "no")
+    stats = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    stats.add_column("Field", style="dim")
+    stats.add_column("Value", style="bold")
 
+    stats.add_row("Avg message length", f"{style.avg_message_length:.0f} chars")
+    stats.add_row("Avg word count", f"{style.avg_word_count:.1f} words")
+    stats.add_row("Lowercase heavy", "yes" if style.uses_lowercase_heavily else "no")
+    stats.add_row("Uses punctuation", "yes" if style.uses_punctuation else "no")
     if style.common_openers:
-        table.add_row("Common openers", "  ".join(style.common_openers[:5]))
+        stats.add_row("Common openers", "  ".join(style.common_openers[:5]))
     if style.slang_tokens:
-        table.add_row("Slang used", "  ".join(style.slang_tokens[:6]))
+        stats.add_row("Slang", "  ".join(style.slang_tokens[:6]))
     if style.typing_quirks:
-        table.add_row("Typing quirks", " | ".join(style.typing_quirks))
-
+        stats.add_row("Quirks", " · ".join(style.typing_quirks))
     if emoji and emoji.total_emoji_count > 0:
         top = "  ".join(e for e, _ in emoji.top_emojis[:5])
-        table.add_row("Top emoji", top)
-        table.add_row("Emoji frequency", f"{emoji.emoji_frequency:.2f} per message")
+        stats.add_row("Top emoji", top)
+        stats.add_row("Emoji / message", f"{emoji.emoji_frequency:.2f}")
 
-    console.print(table)
+    console.print(stats)
 
     # ── Relationships ──────────────────────────────────────────────────────────
-    if profile.relationships:
-        console.print(f"\n  [dim]Relationships profiled:[/dim]")
-        for rel in profile.relationships[:5]:
-            console.print(f"    [cyan]{rel.contact_name:<25}[/cyan] {rel.message_count} messages")
+    if not profile.relationships:
+        console.print("  [dim]No relationships profiled.[/dim]\n")
+        return
+
+    console.print(f"\n  [bold]Relationships[/bold]  [dim]({len(profile.relationships)} contacts)[/dim]\n")
+
+    rel_table = Table(box=box.SIMPLE, show_header=True, header_style="bold dim")
+    rel_table.add_column("Contact", style="cyan", min_width=22)
+    rel_table.add_column("Type", min_width=18)
+    rel_table.add_column("Confidence", justify="right", min_width=10)
+    rel_table.add_column("Messages", justify="right")
+    rel_table.add_column("Top signal", style="dim")
+
+    TYPE_COLOURS = {
+        "close_friend":      "green",
+        "academic_peer":     "blue",
+        "family":            "magenta",
+        "colleague":         "yellow",
+        "romantic_interest": "red",
+        "acquaintance":      "dim",
+        "unknown":           "dim",
+    }
+
+    for rel in profile.relationships:
+        colour = TYPE_COLOURS.get(rel.relationship_type, "white")
+        type_label = f"[{colour}]{rel.relationship_type}[/{colour}]"
+        confidence_pct = f"{rel.relationship_confidence * 100:.0f}%"
+        top_signal = rel.relationship_signals[0] if rel.relationship_signals else "—"
+        # Truncate signal if too long
+        if len(top_signal) > 42:
+            top_signal = top_signal[:39] + "..."
+        rel_table.add_row(
+            rel.contact_name[:22],
+            type_label,
+            confidence_pct,
+            f"{rel.message_count:,}",
+            top_signal,
+        )
+
+    console.print(rel_table)
     console.print()
 
 

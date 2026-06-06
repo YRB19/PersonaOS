@@ -8,7 +8,6 @@ Tests use fixtures from tests/fixtures/ — no real personal data.
 """
 import pytest
 from pathlib import Path
-from datetime import datetime
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -291,3 +290,156 @@ def _create_telegram_fixture_with_service(tmp_path: Path) -> Path:
     path = tmp_path / "telegram_service_fixture.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return path
+
+
+# ── Relationship Classifier Tests ──────────────────────────────────────────────
+
+from datetime import datetime
+from brain.profiler.models import MessageRecord
+
+
+def _make_msg(sender: str, content: str, hour: int = 14, has_emoji: bool = False) -> MessageRecord:
+    """Helper: build a MessageRecord without needing a full export."""
+    return MessageRecord(
+        timestamp=datetime(2024, 1, 1, hour, 0, 0),
+        sender=sender,
+        content=content,
+        platform="whatsapp",
+        chat_name="Test Chat",
+        has_emoji=has_emoji,
+        has_media=False,
+        word_count=len(content.split()),
+        char_count=len(content),
+    )
+
+
+class TestRelationshipClassifier:
+
+    def setup_method(self):
+        from brain.profiler.classifier import classify_relationship
+        self.classify = classify_relationship
+
+    def test_close_friend_signals(self):
+        """High slang + late night + Hinglish → close_friend."""
+        msgs = (
+            [_make_msg("Rishit", "oye yaar kya ho raha", hour=23)] * 8
+            + [_make_msg("Rishit", "lmao bro that's hilarious fr", hour=1)] * 7
+            + [_make_msg("Rishit", "haan theek hai kal milte", hour=0)] * 5
+        )
+        rel_type, confidence, signals = self.classify(msgs, msgs)
+        assert rel_type == "close_friend", f"Expected close_friend, got {rel_type}"
+        assert confidence > 0.4
+        assert len(signals) > 0
+
+    def test_academic_peer_signals(self):
+        """Academic keywords + file sharing → academic_peer."""
+        msgs = (
+            [_make_msg("Rishit", "bhai assignment submit kar diya?", hour=14)] * 5
+            + [_make_msg("Rishit", "deadline kal hai yaar", hour=15)] * 5
+            + [_make_msg("Rishit", "check newtonschool playground link", hour=16)] * 5
+        )
+        rel_type, confidence, signals = self.classify(msgs, msgs)
+        assert rel_type in ("academic_peer", "close_friend"), \
+            f"Expected academic_peer or close_friend, got {rel_type}"
+
+    def test_family_signals(self):
+        """Family terms → family classification."""
+        msgs = (
+            [_make_msg("Rishit", "haan papa aa raha hun", hour=18)] * 6
+            + [_make_msg("Rishit", "maa khaana ready hai kya", hour=19)] * 6
+            + [_make_msg("Rishit", "bhai ghar pe hai tu", hour=20)] * 6
+        )
+        rel_type, confidence, signals = self.classify(msgs, msgs)
+        assert rel_type == "family", f"Expected family, got {rel_type}"
+        assert confidence > 0.4
+
+    def test_insufficient_messages_returns_unknown(self):
+        """Fewer than MIN_MESSAGES should return unknown."""
+        msgs = [_make_msg("Rishit", "hello", hour=10)] * 3
+        rel_type, confidence, signals = self.classify(msgs, msgs)
+        assert rel_type == "unknown"
+        assert confidence == 0.0
+
+    def test_signals_are_human_readable(self):
+        """Signals should be non-empty strings, not codes."""
+        msgs = [_make_msg("Rishit", "oye yaar kya scene hai", hour=23)] * 15
+        _, _, signals = self.classify(msgs, msgs)
+        for signal in signals:
+            assert isinstance(signal, str)
+            assert len(signal) > 5, f"Signal too short: {signal!r}"
+
+    def test_confidence_between_zero_and_one(self):
+        """Confidence must always be in [0.0, 1.0]."""
+        msgs = [_make_msg("Rishit", "hi how are you", hour=10)] * 12
+        _, confidence, _ = self.classify(msgs, msgs)
+        assert 0.0 <= confidence <= 1.0
+
+    def test_relationship_type_is_valid(self):
+        """Returned type must be one of the defined RELATIONSHIP_TYPES."""
+        from brain.profiler.models import RELATIONSHIP_TYPES
+        msgs = [_make_msg("Rishit", "oye sun bro", hour=22)] * 12
+        rel_type, _, _ = self.classify(msgs, msgs)
+        assert rel_type in RELATIONSHIP_TYPES, \
+            f"Unknown type returned: {rel_type!r}"
+
+
+# ── Multi-File Profile Tests ───────────────────────────────────────────────────
+
+class TestMultiFileProfile:
+
+    def setup_method(self):
+        from brain.profiler.analyzer import build_profile
+        self.build_profile = build_profile
+
+    def test_sources_tracked_in_profile(self):
+        """Profile should record which source files it was built from."""
+        from brain.profiler.parsers.whatsapp import parse_whatsapp_export
+        fixture = FIXTURES_DIR / "sample_whatsapp.txt"
+        records = parse_whatsapp_export(fixture)
+        sources = ["sample_whatsapp.txt"]
+        profile = self.build_profile(records, user_name="Rishit", sources=sources)
+        assert profile.sources == sources
+
+    def test_combining_records_from_two_parses(self):
+        """
+        Simulates running setup on two files:
+        parse file1 + parse file2 → combine → build_profile.
+        Message count should equal sum of both.
+        """
+        from brain.profiler.parsers.whatsapp import parse_whatsapp_export
+        fixture = FIXTURES_DIR / "sample_whatsapp.txt"
+
+        records_a = parse_whatsapp_export(fixture)
+        records_b = parse_whatsapp_export(fixture)  # same file twice for test
+
+        combined = records_a + records_b
+        profile = self.build_profile(
+            combined,
+            user_name="Rishit",
+            sources=["chat_a.txt", "chat_b.txt"],
+        )
+        # Combined corpus has twice the messages — profile should reflect this
+        your_msgs_a = [r for r in records_a if r.sender == "Rishit"]
+        your_msgs_b = [r for r in records_b if r.sender == "Rishit"]
+        expected_total = len(your_msgs_a) + len(your_msgs_b)
+        assert profile.total_messages_analyzed == expected_total
+
+    def test_empty_sources_list_acceptable(self):
+        """sources=None should not crash — defaults to empty list."""
+        from brain.profiler.parsers.whatsapp import parse_whatsapp_export
+        fixture = FIXTURES_DIR / "sample_whatsapp.txt"
+        records = parse_whatsapp_export(fixture)
+        profile = self.build_profile(records, user_name="Rishit", sources=None)
+        assert profile.sources == []
+
+    def test_relationships_have_type_after_build(self):
+        """Every RelationshipProfile should have a relationship_type after build."""
+        from brain.profiler.parsers.whatsapp import parse_whatsapp_export
+        fixture = FIXTURES_DIR / "sample_whatsapp.txt"
+        records = parse_whatsapp_export(fixture)
+        profile = self.build_profile(records, user_name="Rishit")
+        for rel in profile.relationships:
+            assert rel.relationship_type != "", \
+                f"relationship_type empty for {rel.contact_name}"
+            assert isinstance(rel.relationship_confidence, float)
+            assert 0.0 <= rel.relationship_confidence <= 1.0
