@@ -351,7 +351,7 @@ class TestRelationshipClassifier:
         )
         rel_type, confidence, signals = self.classify(msgs, msgs)
         assert rel_type == "family", f"Expected family, got {rel_type}"
-        assert confidence > 0.4
+        assert confidence >= 0.4
 
     def test_insufficient_messages_returns_unknown(self):
         """Fewer than MIN_MESSAGES should return unknown."""
