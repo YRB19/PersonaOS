@@ -37,7 +37,7 @@ from brain.profiler.models import MessageRecord
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-EMBEDDING_MODEL   = "all-MiniLM-L6-v2"  # 384-dim, ~90MB, fast on Apple Silicon
+EMBEDDING_MODEL   = "paraphrase-multilingual-MiniLM-L12-v2"  # ~470MB, fast on Apple Silicon
 COLLECTION_NAME   = "persona_messages"
 DEFAULT_TOP_K     = 5
 BATCH_SIZE        = 128   # messages per SentenceTransformer call
