@@ -70,7 +70,7 @@ TRACKED_FILES = [
 
 # Key dependencies to check (subset of requirements.txt)
 KEY_DEPS = [
-    "pydantic", "dotenv", "rich", "typer", "ollama",
+    "pydantic", "python_dotenv", "rich", "typer", "ollama",
     "sentence_transformers", "chromadb", "emoji", "pytest",
 ]
 

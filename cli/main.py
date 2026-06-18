@@ -464,6 +464,168 @@ Write a brief, human-readable summary of this person's communication style and k
     console.print("[dim]  (Summary not persisted in this version)[/dim]\n")
 
 
+# ── store ──────────────────────────────────────────────────────────────────────
+
+@app.command()
+def store(
+    paths: list[str] = typer.Argument(
+        ...,
+        help="Export files or directory to embed. Same syntax as setup.",
+    ),
+    you: str = typer.Option(..., "--you", "-u", help="Your name — only YOUR messages get embedded"),
+    db: str = typer.Option("data/db/chroma", "--db", help="ChromaDB storage path"),
+    clear_first: bool = typer.Option(False, "--clear", help="Clear existing index before adding"),
+):
+    """
+    Embed chat exports into ChromaDB for semantic memory retrieval.
+
+    This is Phase 2A — run it after setup to populate the vector store.
+    Only YOUR messages are embedded (--you flag). The store is used by
+    the reply generator to find your most relevant past messages.
+
+    Examples:
+        python -m cli.main store data/exports/ --you "Rishit Babbar"
+        python -m cli.main store data/exports/ --you "Rishit Babbar" --clear
+    """
+    from brain.memory.store import PersonaStore
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    export_files = _resolve_export_files(paths)
+
+    console.print()
+    console.print(Panel(
+        f"[bold]Building memory store for:[/bold] {you}\n"
+        f"[dim]{len(export_files)} file(s) → {db}[/dim]",
+        style="blue",
+    ))
+
+    # ── Initialise store ───────────────────────────────────────────────────────
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True) as progress:
+        task = progress.add_task("Loading embedding model...", total=None)
+
+        try:
+            persona_store = PersonaStore(chroma_path=db)
+        except Exception as e:
+            console.print(f"\n[red]✗[/red] Failed to initialise store: {e}\n")
+            raise typer.Exit(1)
+
+        if clear_first:
+            progress.update(task, description="Clearing existing index...")
+            persona_store.clear()
+            console.print(f"  [dim]✓ Cleared existing index[/dim]")
+
+        # ── Parse + embed all files ────────────────────────────────────────────
+        total_stored = 0
+        total_skipped = 0
+
+        for export_file in export_files:
+            progress.update(task, description=f"Embedding {export_file.name}...")
+            try:
+                records = _parse_file(export_file)
+                if not records:
+                    total_skipped += 1
+                    continue
+                n = persona_store.add_messages(records, sender_filter=you)
+                total_stored += n
+                progress.update(
+                    task,
+                    description=f"✓ {export_file.name} — {n} messages embedded",
+                )
+            except Exception as e:
+                console.print(f"  [yellow]⚠[/yellow] {export_file.name}: {e}")
+                total_skipped += 1
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    stats = persona_store.stats()
+    console.print()
+    console.print(Panel(
+        f"[bold green]✓ Memory store built[/bold green]\n"
+        f"[dim]{total_stored:,} messages embedded this run · "
+        f"{stats['total']:,} total in store · "
+        f"senders: {', '.join(stats['senders'])}[/dim]",
+        subtitle=db,
+        style="green",
+    ))
+
+    if total_skipped:
+        console.print(f"  [yellow]⚠[/yellow] {total_skipped} file(s) skipped\n")
+
+    console.print(
+        "  [dim]Run:[/dim] python -m cli.main search \"your query\" "
+        f"--you \"{you}\" [dim]to test retrieval[/dim]\n"
+    )
+
+
+# ── search ─────────────────────────────────────────────────────────────────────
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Text to search for in your past messages"),
+    you: str = typer.Option(..., "--you", "-u", help="Your sender name"),
+    top: int = typer.Option(5, "--top", "-n", help="Number of results to return"),
+    db: str = typer.Option("data/db/chroma", "--db", help="ChromaDB storage path"),
+    chat: str = typer.Option("", "--chat", "-c", help="Filter to a specific contact/chat"),
+):
+    """
+    Search your past messages by semantic similarity.
+
+    This tests Phase 2A — finds the most similar things you've said
+    in the past to a given query. This is exactly what the reply
+    generator uses as context before drafting a reply.
+
+    Examples:
+        python -m cli.main search "what are you doing tonight" --you "Rishit Babbar"
+        python -m cli.main search "assignment deadline" --you "Rishit Babbar" --top 3
+        python -m cli.main search "plans for the weekend" --you "Rishit Babbar" --chat "Vibhu"
+    """
+    from brain.memory.store import PersonaStore
+
+    try:
+        persona_store = PersonaStore(chroma_path=db)
+    except Exception as e:
+        console.print(f"\n[red]✗[/red] Could not load store: {e}\n")
+        raise typer.Exit(1)
+
+    if persona_store.count() == 0:
+        console.print(
+            f"\n[yellow]⚠[/yellow] Store is empty. Run first:\n"
+            f"  python -m cli.main store data/exports/ --you \"{you}\"\n"
+        )
+        raise typer.Exit(1)
+
+    results = persona_store.retrieve_similar(
+        text=query,
+        top_k=top,
+        sender_filter=you if you else None,
+        chat_filter=chat if chat else None,
+    )
+
+    console.print()
+    console.print(Panel(
+        f"[bold]Search:[/bold] {query}\n"
+        f"[dim]{persona_store.count():,} messages in store · showing top {top}[/dim]",
+        style="blue",
+    ))
+
+    if not results:
+        console.print("  [dim]No results found.[/dim]\n")
+        return
+
+    for i, r in enumerate(results, 1):
+        sim_pct = f"{r['similarity']:.0%}"
+        sim_bar = "█" * int(r["similarity"] * 15)
+        chat_label = f"[dim]{r['chat_name']}[/dim]  " if r["chat_name"] else ""
+
+        console.print(
+            f"\n  [bold cyan]{i}.[/bold cyan]  "
+            f"[green]{sim_pct}[/green]  [dim]{sim_bar}[/dim]  "
+            f"{chat_label}"
+        )
+        console.print(f"     {r['content']}")
+
+    console.print()
+
+
 # ── check ──────────────────────────────────────────────────────────────────────
 
 @app.command()
