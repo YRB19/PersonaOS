@@ -22,6 +22,7 @@ from datetime import datetime
 
 RELATIONSHIP_TYPES = {
     "close_friend",
+    "college_friend",     
     "academic_peer",
     "family",
     "colleague",
