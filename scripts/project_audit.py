@@ -55,6 +55,7 @@ TRACKED_FILES = [
     "brain/profiler/parsers/whatsapp.py",
     "brain/profiler/parsers/telegram.py",
     "brain/profiler/analyzer.py",
+    "brain/profiler/signals.py",
     # Phase 2
     "brain/memory/__init__.py",
     "brain/memory/store.py",
