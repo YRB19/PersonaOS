@@ -56,6 +56,7 @@ TRACKED_FILES = [
     "brain/profiler/parsers/telegram.py",
     "brain/profiler/analyzer.py",
     "brain/profiler/signals.py",
+    "brain/profiler/classifier.py",
     # Phase 2
     "brain/memory/__init__.py",
     "brain/memory/store.py",
@@ -67,6 +68,9 @@ TRACKED_FILES = [
     "scripts/project_audit.py",
     "tests/__init__.py",
     "tests/test_parsers.py",
+    "tests/test_store.py",
+    "tests/test_signals.py",
+    "tests/test_generator.py",
 ]
 
 # Key dependencies to check (subset of requirements.txt)
@@ -82,16 +86,21 @@ PHASES = {
         "brain/profiler/parsers/whatsapp.py",
         "brain/profiler/parsers/telegram.py",
         "brain/profiler/analyzer.py",
+        "brain/profiler/signals.py",
+        "brain/profiler/classifier.py",
     ],
-    "Phase 2 — Memory": [
+    "Phase 2A — Memory": [
         "brain/memory/store.py",
     ],
-    "Phase 2 — Generator": [
+    "Phase 2B — Generator": [
         "brain/generator/reply.py",
     ],
     "Infrastructure": [
         "cli/main.py",
         "tests/test_parsers.py",
+        "tests/test_store.py",
+        "tests/test_signals.py",
+        "tests/test_generator.py",
     ],
 }
 

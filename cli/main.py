@@ -626,6 +626,96 @@ def search(
     console.print()
 
 
+# ── reply ─────────────────────────────────────────────────────────────────────
+
+@app.command()
+def reply(
+    incoming: str = typer.Argument(..., help="The message you received"),
+    you: str      = typer.Option(..., "--you",     "-u", help="Your name (matches profile)"),
+    contact: str  = typer.Option(..., "--contact", "-c", help="Who sent the message"),
+    num: int      = typer.Option(3,   "--num",     "-n", help="Number of draft options"),
+    model: str    = typer.Option("qwen3.5:9b", "--model", "-m", help="Ollama model"),
+    db: str       = typer.Option("data/db/chroma",  "--db",  help="ChromaDB path"),
+    profiles_dir: str = typer.Option("data/profiles", "--dir", "-d", help="Profiles directory"),
+):
+    """
+    Generate personalized reply drafts for an incoming message.
+
+    Requires Ollama running: ollama serve
+
+    Examples:
+        python -m cli.main reply "are you free tonight?" --you "Rishit Babbar" --contact "Priya"
+        python -m cli.main reply "bhai notes bhej de" --you "Rishit Babbar" --contact "Shreyansh" --num 5
+    """
+    from brain.memory.store import PersonaStore
+    from brain.generator.reply import ReplyGenerator
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+
+    incoming_preview = incoming[:60] + "..." if len(incoming) > 60 else incoming
+    console.print()
+    console.print(Panel(
+        f"[bold]Generating reply drafts[/bold]\n"
+        f"[dim]From: {contact}  ·  \"{incoming_preview}\"[/dim]",
+        style="blue",
+    ))
+
+    # ── Load store ─────────────────────────────────────────────────────────────
+    try:
+        store      = PersonaStore(chroma_path=db)
+        store_size = store.count()
+    except Exception as e:
+        console.print(f"\n[red]✗[/red]  Could not load store: {e}\n")
+        raise typer.Exit(1)
+
+    if store_size == 0:
+        console.print(
+            f"\n[yellow]⚠[/yellow]  Vector store is empty — RAG will be skipped.\n"
+            f"  [dim]Run first: python -m cli.main store data/exports/ --you \"{you}\"[/dim]\n"
+        )
+
+    gen = ReplyGenerator(store, profiles_dir=profiles_dir, model=model)
+
+    # ── Generate ───────────────────────────────────────────────────────────────
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True) as progress:
+        task = progress.add_task(f"Asking {model} to write like you...", total=None)
+        try:
+            drafts = gen.generate(
+                incoming=incoming,
+                from_contact=contact,
+                user_name=you,
+                num_drafts=num,
+            )
+            progress.update(task, description="Done.")
+        except RuntimeError as e:
+            console.print(f"\n[red]✗[/red]  {e}\n")
+            raise typer.Exit(1)
+
+    # ── Display ────────────────────────────────────────────────────────────────
+    if not drafts:
+        console.print(
+            "\n[yellow]⚠[/yellow]  No drafts generated.\n"
+            "  Check that Ollama is running and qwen3.5:9b is pulled.\n"
+        )
+        raise typer.Exit(1)
+
+    console.print(
+        f"\n  [dim]{store_size:,} messages in memory  ·  "
+        f"{len(drafts)} draft(s)  ·  {model}[/dim]\n"
+    )
+
+    for i, draft in enumerate(drafts, 1):
+        border = "cyan" if i == 1 else "dim"
+        console.print(Panel(
+            f"[white]{draft}[/white]",
+            title=f"[bold {border}]Draft {i}[/bold {border}]",
+            border_style=border,
+        ))
+
+    console.print(
+        "\n  [dim]Pick one, edit it, then send it yourself. You stay in control.[/dim]\n"
+    )
+
+
 # ── check ──────────────────────────────────────────────────────────────────────
 
 @app.command()
