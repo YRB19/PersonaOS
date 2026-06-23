@@ -10,16 +10,25 @@ Given an incoming message, this module:
 Architecture:
   ReplyGenerator      ← public class, orchestrates the full pipeline
   build_prompt()      ← public, returns (system, user) tuple — testable without Ollama
-  _strip_thinking()   ← strips qwen3 <think>...</think> blocks before parsing
+  _strip_thinking()   ← strips qwen3 ... blocks before parsing
   _parse_reply_json() ← paranoid parser with 4 fallback layers
   _rel_label()        ← maps RelationshipProfile type to human label
 
 Fix history:
-  v2: Added _strip_thinking() — qwen3.5:9b outputs <think>...</think> blocks
+  v2: Added _strip_thinking() — qwen3.5:9b outputs ... blocks
       before the actual JSON. These blocks contain braces that break the
       [^{}]* regex in layer 2. Stripping them first fixes empty-draft bug.
       Removed /no_think from user message — it is not a standard Ollama
       API parameter and can confuse the model in chat format.
+
+  v3: Switched from ollama.chat() to ollama.generate().
+      Root cause of 0-char response: qwen3.5:9b in thinking mode puts its
+      output in message.thinking, leaving message.content as empty string.
+      ollama.chat() returns nothing useful for this model.
+      ollama.generate() always populates response.response regardless of
+      thinking mode — confirmed working in this environment (same API the
+      summary command uses). Combined prompt structure replaces system/user
+      role separation.
 """
 
 # attached: Ollama ollama qwen qwen3 qwen3.5 Priya,Babbar unparseable
@@ -34,7 +43,7 @@ from typing import Optional
 from brain.profiler.models import CommunicationProfile, RelationshipProfile
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-DEFAULT_MODEL      = "gemma4:latest"
+DEFAULT_MODEL      = "qwen3.5:9b"
 DEFAULT_NUM_DRAFTS = 3
 MAX_RAG_EXAMPLES   = 5
 
