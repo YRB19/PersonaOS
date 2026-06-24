@@ -224,7 +224,7 @@ class ReplyGenerator:
                     model=self.model,
                     prompt=combined_prompt,
                     stream=False,
-                    think=True,
+                    think=False,
                     options={"temperature": 0.85},
                 )
             except TypeError:
