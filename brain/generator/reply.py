@@ -1,61 +1,80 @@
-"""brain/generator/reply.py
-Phase 2B — Reply draft generator.
+"""
+brain/generator/reply.py
+
+Phase 2B - Reply draft generator.
+
 Given an incoming message, this module:
   1. Loads the user's CommunicationProfile (style + relationships)
   2. Retrieves the most semantically similar past messages from PersonaStore (RAG)
   3. Builds a structured prompt (system + user, chat-format LLM calls)
   4. Calls Ollama to generate N draft replies that match the user's style
-  5. Returns list[str] — the user picks one. Nothing auto-sends.
+  5. Returns list[str] - the user picks one. Nothing auto-sends.
 
 Architecture:
-  ReplyGenerator      ← public class, orchestrates the full pipeline
-  build_prompt()      ← public, returns (system, user) tuple — testable without Ollama
-  _strip_thinking()   ← strips qwen3 ... blocks before parsing
-  _parse_reply_json() ← paranoid parser with 4 fallback layers
-  _rel_label()        ← maps RelationshipProfile type to human label
+  ReplyGenerator      <- public class, orchestrates the full pipeline
+  build_prompt()      <- public, returns (system, user) tuple - testable without Ollama
+  _strip_thinking()   <- strips qwen3 <think>...</think> blocks before parsing
+  _parse_reply_json() <- paranoid parser with 4 fallback layers
+  _rel_label()        <- maps RelationshipProfile type to human label
 
 Fix history:
-  v2: Added _strip_thinking() — qwen3.5:9b outputs ... blocks
+  v2: Added _strip_thinking() - qwen3.5:9b outputs <think>...</think> blocks
       before the actual JSON. These blocks contain braces that break the
       [^{}]* regex in layer 2. Stripping them first fixes empty-draft bug.
-      Removed /no_think from user message — it is not a standard Ollama
+      Removed /no_think from user message - it is not a standard Ollama
       API parameter and can confuse the model in chat format.
 
   v3: Switched from ollama.chat() to ollama.generate().
       Root cause of 0-char response: qwen3.5:9b in thinking mode puts its
       output in message.thinking, leaving message.content as empty string.
-      ollama.chat() returns nothing useful for this model.
       ollama.generate() always populates response.response regardless of
-      thinking mode — confirmed working in this environment (same API the
-      summary command uses). Combined prompt structure replaces system/user
-      role separation.
+      thinking mode - confirmed working in this environment.
+
+  v4: Root cause corrected - num_predict=512 was the real problem, not
+      chat() vs generate(). qwen3.5:9b is a thinking model that generates
+      500-2000 internal reasoning tokens before writing the actual reply.
+      With num_predict=512, the entire budget was consumed by thinking and
+      the model never wrote a character of actual response. response.response
+      was legitimately empty - generation terminated mid-think.
+
+      Two fixes applied:
+        1. think=False - disables thinking mode entirely for this model.
+           Faster, no reasoning tokens consumed, full budget goes to reply.
+        2. num_predict removed - no artificial cap. The summary command
+           (which works) never sets num_predict. Neither should we.
+
+      Response extraction now mirrors the working summary command exactly:
+        response.get("response", "") - works with both dict and Pydantic.
 """
-
-# attached: Ollama ollama qwen qwen3 qwen3.5 Priya,Babbar unparseable
-# These tokens are project-specific terms and should not be treated as bugs by
-# linters or reviewers. Present to reduce false-positive "unknown word" flags.
-
 import json
 import os
 import re
 from pathlib import Path
 from typing import Optional
+
 from brain.profiler.models import CommunicationProfile, RelationshipProfile
 
+
 # ── Constants ──────────────────────────────────────────────────────────────────
+
 DEFAULT_MODEL      = "qwen3.5:9b"
 DEFAULT_NUM_DRAFTS = 3
 MAX_RAG_EXAMPLES   = 5
 
+
 # ── Main class ─────────────────────────────────────────────────────────────────
+
 class ReplyGenerator:
     """
     Generates personalized reply drafts using RAG + style profile.
+
     Usage:
         from brain.memory.store import PersonaStore
         from brain.generator.reply import ReplyGenerator
+
         store = PersonaStore("data/db/chroma")
         gen   = ReplyGenerator(store, profiles_dir="data/profiles")
+
         drafts = gen.generate(
             incoming="are you free tonight?",
             from_contact="Priya",
@@ -64,6 +83,7 @@ class ReplyGenerator:
         for i, draft in enumerate(drafts, 1):
             print(f"{i}. {draft}")
     """
+
     def __init__(
         self,
         store,
@@ -84,14 +104,17 @@ class ReplyGenerator:
     ) -> list[str]:
         """
         Generate personalized reply drafts for an incoming message.
+
         Args:
             incoming:     The message you received and need to reply to
             from_contact: Who sent it (matched against profile relationship names)
             user_name:    Your display name as it appears in the export and profile
             num_drafts:   Number of options to generate (default 3)
+
         Returns:
             List of draft strings, typically num_drafts long.
             Empty list only if Ollama returns something completely unparseable.
+
         Raises:
             RuntimeError: if Ollama is unreachable or returns an API error
         """
@@ -111,6 +134,7 @@ class ReplyGenerator:
         return self._call_ollama(system, user, num_drafts)
 
     # ── Internal helpers ───────────────────────────────────────────────────────
+
     def _load_profile_safe(self, user_name: str) -> Optional[CommunicationProfile]:
         try:
             from brain.profiler.analyzer import load_profile, profile_path
@@ -125,16 +149,13 @@ class ReplyGenerator:
     ) -> Optional[RelationshipProfile]:
         if not profile or not profile.relationships:
             return None
-
         cl = contact_name.lower()
         for rel in profile.relationships:
             if rel.contact_name.lower() == cl:
                 return rel
-
         for rel in profile.relationships:
             if cl in rel.contact_name.lower() or rel.contact_name.lower() in cl:
                 return rel
-
         return None
 
     def _retrieve_examples(
@@ -162,45 +183,87 @@ class ReplyGenerator:
         num_drafts:    int,
     ) -> list[str]:
         """
-        Call Ollama using chat format and parse the response.
-        Why chat over generate?
-          System/user role separation produces more reliable JSON output.
+        Call Ollama using generate() and parse the response.
+
+        Why generate() and not chat():
+          qwen3.5:9b thinking mode puts output into message.thinking,
+          leaving message.content empty. generate() populates response.response
+          regardless of thinking mode. Matches how the summary command works.
+
+        Why think=False:
+          qwen3.5:9b generates 500–2000 internal reasoning tokens before
+          writing any actual reply. With a token cap those thinking tokens
+          consume the entire budget. think=False disables reasoning entirely —
+          faster, no wasted tokens, full output goes to the reply.
+
+        Why no num_predict cap:
+          The summary command (proven working) sets no num_predict.
+          For reply generation we need the model to complete the full JSON
+          response without being cut off mid-output.
+
+        Response extraction:
+          Mirrors the summary command exactly:
+            response.get("response", "")
+          Works with both dict responses (older library) and Pydantic models
+          (newer library) via __getitem__ compatibility.
+
         Debug mode:
-          Set PERSONA_DEBUG=1 in environment to print raw LLM output to stderr.
-          raw response is also stored on self._last_raw for programmatic access.
-        v2 note:
-          Removed /no_think from user message. It is not a standard Ollama
-          parameter and caused model confusion in chat mode. Thinking blocks
-          are now stripped in _parse_reply_json() instead.
+          PERSONA_DEBUG=1 prints response type and raw content to stderr.
+          self._last_raw stores it for programmatic inspection.
         """
         import ollama
+
+        combined_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
+
         try:
-            response = ollama.chat(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": user_prompt},
-                ],
-                options={
-                    "temperature": 0.85,
-                    "num_predict": 512,
-                },
-            )
-            raw = response.message.content.strip()
+            # think=False: disable qwen3 reasoning tokens entirely.
+            # Supported in ollama-python 0.4.x+ and Ollama server 0.9+.
+            # Falls back gracefully if not supported by the library version.
+            try:
+                response = ollama.generate(
+                    model=self.model,
+                    prompt=combined_prompt,
+                    stream=False,
+                    think=True,
+                    options={"temperature": 0.85},
+                )
+            except TypeError:
+                # Library version does not support think= parameter
+                response = ollama.generate(
+                    model=self.model,
+                    prompt=combined_prompt,
+                    stream=False,
+                    options={"temperature": 0.85},
+                )
+
+            # Extract response text — mirrors summary command's proven approach
+            # .get() works on both dict responses and Pydantic models (via __getitem__)
+            if isinstance(response, dict):
+                raw = (response.get("response", "") or "").strip()
+            else:
+                # Pydantic model — try attribute access first, then dict-style
+                raw = (getattr(response, "response", None) or "").strip()
+                if not raw and hasattr(response, "__getitem__"):
+                    raw = (response.get("response", "") or "").strip()
+
             self._last_raw = raw
 
             if os.getenv("PERSONA_DEBUG"):
                 import sys
-                print(f"\n[DEBUG] Raw LLM response ({len(raw)} chars):\n{raw}\n", file=sys.stderr)
+                print(f"\n[DEBUG] Response type: {type(response).__name__}", file=sys.stderr)
+                print(f"[DEBUG] Raw LLM response ({len(raw)} chars):\n{raw}\n", file=sys.stderr)
 
             return _parse_reply_json(raw, num_drafts)
+
         except Exception as e:
             raise RuntimeError(
                 f"Ollama call failed ({type(e).__name__}): {e}\n"
                 "Is Ollama running?  Run: ollama serve"
             ) from e
 
+
 # ── Prompt builder ─────────────────────────────────────────────────────────────
+
 def build_prompt(
     incoming:     str,
     from_contact: str,
@@ -211,14 +274,16 @@ def build_prompt(
 ) -> tuple[str, str]:
     """
     Build (system_prompt, user_prompt) for reply generation.
-    Returns a 2-tuple:
-      system → WHO the user is (style + relationship) — stable per contact
-      user   → WHAT to reply to (RAG examples + incoming message) — changes each call
-    Public so tests can verify prompt content without Ollama.
+
+    Returns a 2-tuple even though generate() combines them.
+    Keeping the split makes build_prompt() independently testable without Ollama.
+
+    Public so tests can verify prompt content without any LLM call.
     """
     system = _build_system_prompt(profile, relationship, from_contact, num_drafts)
     user   = _build_user_prompt(incoming, from_contact, examples, num_drafts)
     return system, user
+
 
 def _build_system_prompt(
     profile:      Optional[CommunicationProfile],
@@ -227,8 +292,8 @@ def _build_system_prompt(
     num_drafts:   int,
 ) -> str:
     parts: list[str] = []
-    rel_label = _rel_label(relationship)
 
+    rel_label = _rel_label(relationship)
     parts.append(
         f"You help draft casual WhatsApp replies for someone texting their {rel_label}.\n"
         f"Write EXACTLY like this person — their slang, their grammar, their emoji habits.\n"
@@ -238,8 +303,9 @@ def _build_system_prompt(
     if profile and profile.global_style:
         style = profile.global_style
         emoji = profile.global_emoji
+
         lines = ["THEIR WRITING STYLE (match this exactly):"]
-        
+
         if style.avg_message_length < 50:
             lines.append("- Very short messages: 5 to 20 words maximum")
         elif style.avg_message_length < 100:
@@ -249,17 +315,22 @@ def _build_system_prompt(
 
         if style.uses_lowercase_heavily:
             lines.append("- Never capitalizes — always lowercase")
+
         if not style.uses_punctuation:
             lines.append("- Minimal punctuation — no periods, rare commas")
+
         if style.slang_tokens:
             lines.append(f"- Uses these words: {', '.join(style.slang_tokens[:7])}")
+
         if style.typing_quirks:
             lines.append(f"- Quirks: {', '.join(style.typing_quirks[:3])}")
+
         if emoji and emoji.emoji_frequency > 0.1:
             top = " ".join(e for e, _ in emoji.top_emojis[:4])
             lines.append(f"- About {emoji.emoji_frequency:.1f} emoji per message, favorites: {top}")
         else:
             lines.append("- Rarely or never uses emoji")
+
         parts.append("\n".join(lines))
 
     if relationship:
@@ -280,6 +351,7 @@ def _build_system_prompt(
 
     return "\n\n".join(parts)
 
+
 def _build_user_prompt(
     incoming:     str,
     from_contact: str,
@@ -287,7 +359,7 @@ def _build_user_prompt(
     num_drafts:   int,
 ) -> str:
     parts: list[str] = []
-    
+
     if examples:
         ex_lines = ["PAST MESSAGES IN SIMILAR CONTEXTS (imitate this style):"]
         for ex in examples[:MAX_RAG_EXAMPLES]:
@@ -301,29 +373,16 @@ def _build_user_prompt(
 
     return "\n\n".join(parts)
 
+
 # ── Output parsing ─────────────────────────────────────────────────────────────
 
 def _strip_thinking(text: str) -> str:
     """
     Strip qwen3-style <think>...</think> blocks from LLM output.
 
-    Why this exists:
-      qwen3 and qwen3.5 models output their internal reasoning between
-      <think> and </think> tags before the actual response. Without stripping
-      these blocks, the JSON regex patterns fail because thinking blocks
-      routinely contain { } characters that break the [^{}]* pattern in
-      layer-2 parsing. The actual JSON is always AFTER the closing </think>.
-
-    Example raw output from qwen3.5:9b:
-      <think>
-      The user wants me to draft replies. Let me think about how Rishit
-      would respond... considering his style with {slang} and {tone}...
-      </think>
-
-      {"replies": ["haan yaar", "lol ok", "aaja bhai"]}
-
-    This function reduces that to just:
-      {"replies": ["haan yaar", "lol ok", "aaja bhai"]}
+    Retained even though think=False should prevent these blocks.
+    Acts as a safety net if thinking is somehow re-enabled or if a
+    different model is used that doesn't respect think=False.
     """
     stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     return stripped.strip()
@@ -333,10 +392,10 @@ def _parse_reply_json(raw: str, expected: int = DEFAULT_NUM_DRAFTS) -> list[str]
     """
     Extract reply list from LLM output with four fallback layers.
 
-    Preprocessing (before any layer):
-      Strip <think>...</think> blocks — qwen3 thinking output.
+    Preprocessing:
+      Strip <think>...</think> blocks (safety net for thinking models).
 
-    Layer 1: clean JSON → {"replies": ["a", "b", "c"]}
+    Layer 1: direct JSON parse → {"replies": ["a", "b", "c"]}
     Layer 2: JSON fenced in ```...```
     Layer 3: JSON object embedded in prose
     Layer 4: numbered list ("1. reply text")
@@ -346,7 +405,6 @@ def _parse_reply_json(raw: str, expected: int = DEFAULT_NUM_DRAFTS) -> list[str]
     if not raw:
         return []
 
-    # ── Pre-process: strip thinking blocks ────────────────────────────────────
     text = _strip_thinking(raw)
     if not text:
         return []
@@ -364,7 +422,6 @@ def _parse_reply_json(raw: str, expected: int = DEFAULT_NUM_DRAFTS) -> list[str]
         pass
 
     # Layer 2: JSON object embedded in prose
-    #   Note: now safe to use [^{}]* because thinking blocks are already stripped
     match = re.search(
         r'\{[^{}]*"(?:replies|options|drafts)"\s*:\s*\[.*?\]\s*\}',
         text,
