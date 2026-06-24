@@ -1,7 +1,7 @@
 """
 brain/generator/reply.py
 
-Phase 2B - Reply draft generator.
+Phase 2B — Reply draft generator.
 
 Given an incoming message, this module:
   1. Loads the user's CommunicationProfile (style + relationships)
@@ -45,6 +45,20 @@ Fix history:
 
       Response extraction now mirrors the working summary command exactly:
         response.get("response", "") - works with both dict and Pydantic.
+
+  v5: Two changes for quality:
+      (1) PROMPT: removed slang word list. Replaced with register/vibe description.
+          "Use these words: lol, fr, bro..." caused the model to force-fit vocabulary
+          regardless of context. Now: describe the style, let RAG examples teach it.
+          Added context analysis step: model reads what the incoming message is
+          actually asking before writing.
+      (2) THINKING: re-enabled think=True with num_predict=2000.
+          think=False gave output but no contextual judgment.
+          think=True lets the model reason: "what is the person asking?
+          what would this user actually reply here?" before writing.
+          num_predict=2000 covers thinking (~500-1500 tokens) + output (~200 tokens).
+          Switched back to ollama.chat() which properly separates thinking from output.
+          Falls back to generate() if chat() fails.
 """
 import json
 import os
@@ -183,83 +197,102 @@ class ReplyGenerator:
         num_drafts:    int,
     ) -> list[str]:
         """
-        Call Ollama using generate() and parse the response.
+        Call Ollama and parse the response.
 
-        Why generate() and not chat():
-          qwen3.5:9b thinking mode puts output into message.thinking,
-          leaving message.content empty. generate() populates response.response
-          regardless of thinking mode. Matches how the summary command works.
+        Strategy: ollama.chat() with think=True and num_predict=2000.
 
-        Why think=False:
-          qwen3.5:9b generates 500–2000 internal reasoning tokens before
-          writing any actual reply. With a token cap those thinking tokens
-          consume the entire budget. think=False disables reasoning entirely —
-          faster, no wasted tokens, full output goes to the reply.
+        Why think=True (re-enabled from v4):
+          think=False produced output but with no contextual judgment —
+          the model filled the output mechanically from word lists.
+          think=True lets it reason: "what is this person asking?
+          what would this user naturally say here?" before committing.
+          The thinking chain is discarded; only message.content is used.
 
-        Why no num_predict cap:
-          The summary command (proven working) sets no num_predict.
-          For reply generation we need the model to complete the full JSON
-          response without being cut off mid-output.
+        Why num_predict=2000:
+          thinking chain: ~500-1500 tokens
+          JSON output:    ~100-200 tokens
+          Total budget:   2000 is safe
 
-        Response extraction:
-          Mirrors the summary command exactly:
-            response.get("response", "")
-          Works with both dict responses (older library) and Pydantic models
-          (newer library) via __getitem__ compatibility.
+        Why chat() here (vs generate() in v3/v4):
+          chat() with think=True correctly separates thinking (message.thinking)
+          from output (message.content). We read message.content only.
 
-        Debug mode:
-          PERSONA_DEBUG=1 prints response type and raw content to stderr.
-          self._last_raw stores it for programmatic inspection.
+        Fallback chain:
+          1. chat(think=True)  — best quality
+          2. chat()            — if think= unsupported by library version
+          3. generate()        — if chat() fails entirely
         """
         import ollama
 
-        combined_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
+        raw = ""
 
+        # ── Attempt 1: chat() with think=True (best quality) ──────────────────
         try:
-            # think=False: disable qwen3 reasoning tokens entirely.
-            # Supported in ollama-python 0.4.x+ and Ollama server 0.9+.
-            # Falls back gracefully if not supported by the library version.
+            response = ollama.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                think=True,
+                options={
+                    "temperature": 0.7,
+                    "num_predict": 2000,
+                },
+            )
+            raw = (getattr(response.message, "content", None) or "").strip()
+
+        except TypeError:
+            # think= parameter not supported by this library version
             try:
-                response = ollama.generate(
+                response = ollama.chat(
                     model=self.model,
-                    prompt=combined_prompt,
-                    stream=False,
-                    think=False,
-                    options={"temperature": 0.85},
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_prompt},
+                    ],
+                    options={
+                        "temperature": 0.7,
+                        "num_predict": 2000,
+                    },
                 )
-            except TypeError:
-                # Library version does not support think= parameter
-                response = ollama.generate(
-                    model=self.model,
-                    prompt=combined_prompt,
-                    stream=False,
-                    options={"temperature": 0.85},
-                )
-
-            # Extract response text — mirrors summary command's proven approach
-            # .get() works on both dict responses and Pydantic models (via __getitem__)
-            if isinstance(response, dict):
-                raw = (response.get("response", "") or "").strip()
-            else:
-                # Pydantic model — try attribute access first, then dict-style
-                raw = (getattr(response, "response", None) or "").strip()
-                if not raw and hasattr(response, "__getitem__"):
-                    raw = (response.get("response", "") or "").strip()
-
-            self._last_raw = raw
-
-            if os.getenv("PERSONA_DEBUG"):
-                import sys
-                print(f"\n[DEBUG] Response type: {type(response).__name__}", file=sys.stderr)
-                print(f"[DEBUG] Raw LLM response ({len(raw)} chars):\n{raw}\n", file=sys.stderr)
-
-            return _parse_reply_json(raw, num_drafts)
+                raw = (getattr(response.message, "content", None) or "").strip()
+            except Exception:
+                pass
 
         except Exception as e:
             raise RuntimeError(
                 f"Ollama call failed ({type(e).__name__}): {e}\n"
                 "Is Ollama running?  Run: ollama serve"
             ) from e
+
+        # ── Fallback: generate() if chat() returned empty ─────────────────────
+        if not raw:
+            try:
+                combined = f"{system_prompt}\n\n---\n\n{user_prompt}"
+                response  = ollama.generate(
+                    model=self.model,
+                    prompt=combined,
+                    stream=False,
+                    options={"temperature": 0.7},
+                )
+                if isinstance(response, dict):
+                    raw = (response.get("response", "") or "").strip()
+                else:
+                    raw = (getattr(response, "response", None) or "").strip()
+            except Exception as e:
+                raise RuntimeError(
+                    f"Ollama fallback failed: {e}\n"
+                    "Is Ollama running?  Run: ollama serve"
+                ) from e
+
+        self._last_raw = raw
+
+        if os.getenv("PERSONA_DEBUG"):
+            import sys
+            print(f"\n[DEBUG] Raw ({len(raw)} chars):\n{raw}\n", file=sys.stderr)
+
+        return _parse_reply_json(raw, num_drafts)
 
 
 # ── Prompt builder ─────────────────────────────────────────────────────────────

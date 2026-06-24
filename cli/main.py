@@ -631,12 +631,12 @@ def search(
 @app.command()
 def reply(
     incoming: str = typer.Argument(..., help="The message you received"),
-    you: str      = typer.Option(..., "--you",     "-u", help="Your name (matches profile)"),
-    contact: str  = typer.Option(..., "--contact", "-c", help="Who sent the message"),
-    num: int      = typer.Option(3,   "--num",     "-n", help="Number of draft options"),
-    model: str    = typer.Option("qwen3.5:9b", "--model", "-m", help="Ollama model"),
-    db: str       = typer.Option("data/db/chroma",  "--db",  help="ChromaDB path"),
-    profiles_dir: str = typer.Option("data/profiles", "--dir", "-d", help="Profiles directory"),
+    you: str      = typer.Option(..., "--you", "-u",      help="Your name (matches profile)"),
+    contact: str  = typer.Option(..., "--contact", "-c",  help="Who sent the message"),
+    num: int      = typer.Option(3,   "--num", "-n",      help="Number of draft options"),
+    model: str    = typer.Option("qwen3.5:9b", "--model", "-m"),
+    db: str       = typer.Option("data/db/chroma", "--db"),
+    profiles_dir: str = typer.Option("data/profiles", "--dir", "-d"),
 ):
     """
     Generate personalized reply drafts for an incoming message.
@@ -651,8 +651,8 @@ def reply(
     from brain.generator.reply import ReplyGenerator
     from rich.progress import Progress, SpinnerColumn, TextColumn
 
-    incoming_preview = incoming[:60] + "..." if len(incoming) > 60 else incoming
     console.print()
+    incoming_preview = incoming[:60] + "..." if len(incoming) > 60 else incoming
     console.print(Panel(
         f"[bold]Generating reply drafts[/bold]\n"
         f"[dim]From: {contact}  ·  \"{incoming_preview}\"[/dim]",
@@ -664,13 +664,13 @@ def reply(
         store      = PersonaStore(chroma_path=db)
         store_size = store.count()
     except Exception as e:
-        console.print(f"\n[red]✗[/red]  Could not load store: {e}\n")
+        console.print(f"\n[red]✗[/red] Could not load store: {e}\n")
         raise typer.Exit(1)
 
     if store_size == 0:
         console.print(
             f"\n[yellow]⚠[/yellow]  Vector store is empty — RAG will be skipped.\n"
-            f"  [dim]Run first: python -m cli.main store data/exports/ --you \"{you}\"[/dim]\n"
+            f"  [dim]Run: python -m cli.main store data/exports/ --you \"{you}\"[/dim]\n"
         )
 
     gen = ReplyGenerator(store, profiles_dir=profiles_dir, model=model)
@@ -687,7 +687,7 @@ def reply(
             )
             progress.update(task, description="Done.")
         except RuntimeError as e:
-            console.print(f"\n[red]✗[/red]  {e}\n")
+            console.print(f"\n[red]✗[/red] {e}\n")
             raise typer.Exit(1)
 
     # ── Display ────────────────────────────────────────────────────────────────
@@ -698,21 +698,18 @@ def reply(
         )
         raise typer.Exit(1)
 
-    console.print(
-        f"\n  [dim]{store_size:,} messages in memory  ·  "
-        f"{len(drafts)} draft(s)  ·  {model}[/dim]\n"
-    )
+    console.print(f"\n  [dim]{store_size:,} messages in memory · {len(drafts)} drafts · {model}[/dim]\n")
 
     for i, draft in enumerate(drafts, 1):
-        border = "cyan" if i == 1 else "dim"
+        style = "cyan" if i == 1 else "dim"
         console.print(Panel(
             f"[white]{draft}[/white]",
-            title=f"[bold {border}]Draft {i}[/bold {border}]",
-            border_style=border,
+            title=f"[bold {style}]Draft {i}[/bold {style}]",
+            border_style=style,
         ))
 
     console.print(
-        "\n  [dim]Pick one, edit it, then send it yourself. You stay in control.[/dim]\n"
+        "\n  [dim]Pick one, edit it, send it yourself. You're in control.[/dim]\n"
     )
 
 

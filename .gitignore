@@ -29,3 +29,7 @@ data/db/
 *.safetensors
 
 project_state.txt
+.claude
+.claude-flow
+tmp_extract.py
+generate_commands.py
