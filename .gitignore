@@ -31,5 +31,6 @@ data/db/
 project_state.txt
 .claude
 .claude-flow
+CLAUDE.md
 tmp_extract.py
 generate_commands.py
