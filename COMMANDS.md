@@ -457,6 +457,3 @@ python scripts/setup_check.py
 | `--top`, `-n` | search | `5` | Number of search results |
 | `--clear` | store | `False` | Clear existing index first |
 
----
-
-Generated automatically by the PersonaOS documentation generator.

@@ -46,6 +46,8 @@ MEDIA_PLACEHOLDER = "<Media omitted>"
 
 # Substrings that identify WhatsApp system/service messages (not real messages).
 # Using substring match so these work even when WhatsApp appends extra text.
+WHATSAPP_CHAT_PREFIX = "WhatsApp Chat with "
+
 SYSTEM_MESSAGE_FRAGMENTS = [
     "Messages and calls are end-to-end encrypted",
     "changed the subject",
@@ -95,6 +97,8 @@ def parse_whatsapp_export(
 
     if not chat_name:
         chat_name = path.stem
+        if chat_name.startswith(WHATSAPP_CHAT_PREFIX):
+            chat_name = chat_name[len(WHATSAPP_CHAT_PREFIX):]
 
     records: list[MessageRecord] = []
 

@@ -51,15 +51,19 @@ def main(message: str) -> None:
     print("\n  Calling Ollama (may take 30–60s)...")
 
     try:
-        response = ollama.chat(
+        response = ollama.generate(
             model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user},
-            ],
-            options={"temperature": 0.85, "num_predict": 512},
+            prompt=f"{system}\n\n---\n\n{user}",
+            stream=False,
+            think=False,
+            options={"temperature": 0.85},
         )
-        raw = response.message.content
+        if isinstance(response, dict):
+            raw = (response.get("response", "") or "").strip()
+        else:
+            raw = (getattr(response, "response", None) or "").strip()
+            if not raw and hasattr(response, "__getitem__"):
+                raw = (response.get("response", "") or "").strip()
         print(f"\n  ── RAW RESPONSE ({len(raw)} chars) ──")
         print(raw)
         print("  ── END OF RAW RESPONSE ──")
