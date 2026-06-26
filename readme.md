@@ -32,8 +32,10 @@ All of this runs **locally on your machine**. No cloud. No API keys. No data lea
 |-------|-------------|--------|
 | **1** | Communication Profiler — parse exports → style profile → relationship classification | ✅ Complete |
 | **2A** | Memory Store — embed messages into ChromaDB for semantic retrieval | ✅ Complete |
-| **2B** | Reply Generator — RAG + Ollama → personalized draft replies | 🔨 Building |
-| 3 | Media Intelligence — GIF / meme / sticker suggestions | Planned |
+| **2B** | Reply Generator — RAG + Ollama → personalized draft replies | ✅ Complete |
+| **3A** | Media Intelligence — GIF / Reaction/emoji/reaction suggestions| 🔨 Building |
+| **3B** | Media Intelligence — Memes| Planned |
+| **3C** | Media Intelligence — Stickers| Planned |
 | 4 | Android Keyboard integration | Planned |
 | 5 | On-device inference | Planned |
 
