@@ -20,11 +20,27 @@ Telegram JSON structure:
         "date": "2024-01-15T14:30:00",
         "from": "Rishit Sharma",
         "from_id": "user123456",
-        "text": "hey what's up",         ← plain string
-        "text_entities": [...]           ← OR structured entities
+        "text": "hey what's up",
+        "reactions": [                         ← Phase 3A addition
+          {
+            "type": "emoji",
+            "emoji": "👍",
+            "count": 2,
+            "chosen": true     ← true = YOU reacted with this emoji
+          }
+        ]
       }
     ]
   }
+
+Phase 3A — reaction parsing:
+  Telegram exports include a `reactions` field on each message.
+  `"chosen": true` marks reactions that the EXPORTING USER sent.
+  We extract only chosen reactions and store them in MessageRecord.reactions.
+  These are aggregated by the analyzer into EmojiProfile.top_reactions.
+
+  WhatsApp note: WhatsApp .txt exports do NOT include reactions at all.
+  This is a hard platform limitation, not a code gap.
 """
 import json
 from datetime import datetime
@@ -34,8 +50,8 @@ from brain.profiler.models import MessageRecord
 
 # Message types to skip — service events, not actual messages
 SKIP_TYPES = {
-    "service",        # group join/leave, title changes
-    "unsupported",    # old unsupported message types
+    "service",
+    "unsupported",
 }
 
 # Text entity types that add no readable content
@@ -58,7 +74,8 @@ def parse_telegram_export(
         chat_name: Override chat name (defaults to name from JSON)
 
     Returns:
-        List of MessageRecord objects, sorted by timestamp
+        List of MessageRecord objects, sorted by timestamp.
+        MessageRecord.reactions populated where the user sent reactions.
     """
     path = Path(file_path)
     if not path.exists():
@@ -130,6 +147,9 @@ def _parse_message(msg: dict, chat_name: str) -> MessageRecord | None:
     if not content and not has_media:
         return None
 
+    # Phase 3A: extract emoji reactions the user gave to this message
+    reactions = _extract_reactions(msg)
+
     return MessageRecord(
         timestamp=timestamp,
         sender=str(sender),
@@ -140,7 +160,41 @@ def _parse_message(msg: dict, chat_name: str) -> MessageRecord | None:
         has_media=has_media,
         word_count=len(content.split()) if content else 0,
         char_count=len(content),
+        reactions=reactions,
     )
+
+
+def _extract_reactions(msg: dict) -> list[str]:
+    """
+    Extract emoji reactions the current user (exporter) gave to this message.
+
+    Telegram exports include a `reactions` array on each message.
+    Each entry has:
+      - "emoji":  the emoji character
+      - "count":  total number of users who used this reaction
+      - "chosen": true if the EXPORTING USER sent this reaction
+
+    We return only reactions with chosen=True — these are the user's own
+    reactions and are the signal we want for personalisation.
+
+    Returns:
+        List of emoji strings, e.g. ["👍", "❤️"].
+        Empty list if no reactions or the field is absent.
+    """
+    raw = msg.get("reactions", [])
+    if not raw or not isinstance(raw, list):
+        return []
+
+    result: list[str] = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        emoji = r.get("emoji", "")
+        chosen = r.get("chosen", False)
+        if emoji and chosen:
+            result.append(emoji)
+
+    return result
 
 
 def _extract_text(msg: dict) -> str:
@@ -158,7 +212,6 @@ def _extract_text(msg: dict) -> str:
         return raw.strip()
 
     if isinstance(raw, list):
-        # Reconstruct from entity list
         parts: list[str] = []
         for entity in raw:
             if isinstance(entity, str):

@@ -7,6 +7,19 @@ their communication style, emoji habits, and quirks into a CommunicationProfile.
 Usage:
     from brain.profiler.analyzer import build_profile
     profile = build_profile(records, user_name="Rishit")
+
+Phase 3A changes:
+    _extract_emoji_profile() now accepts an optional all_chat_msgs parameter.
+    When provided, reactions are extracted from ALL messages in the conversation
+    (not just the user's messages), because reactions are stored on the message
+    that was REACTED TO — which is typically from the OTHER person.
+
+    Example: if Priya sent a message and you reacted 👍, that message is in
+    all_chat_msgs (Priya's message). Your 👍 is in msg.reactions with chosen=True.
+    We need all_chat_msgs to find these reactions.
+
+    Result: EmojiProfile.top_reactions and reaction_count are now populated
+    for Telegram exports. For WhatsApp, both remain 0/[] (platform limitation).
 """
 from pathlib import Path
 import re
@@ -29,11 +42,9 @@ except ImportError:
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-# Words that signal a message opener (first meaningful word)
 FILLER_TOKENS = {"the", "a", "an", "is", "it", "i", "you", "we", "ok",
                  "okay", "and", "but", "so", "just", "also", "then"}
 
-# Common slang / informal tokens — extend this over time
 SLANG_VOCAB = {
     "lol", "lmao", "lmfao", "omg", "wtf", "idk", "tbh", "ngl", "imo",
     "imho", "btw", "fyi", "smh", "fr", "frfr", "lowkey", "highkey",
@@ -80,8 +91,9 @@ def build_profile(
             f"Senders in this export: {sorted({r.sender for r in records})}"
         )
 
+    # Global emoji profile uses the full record set for reaction extraction
     global_style = _extract_style(user_msgs)
-    global_emoji = _extract_emoji_profile(user_msgs)
+    global_emoji = _extract_emoji_profile(user_msgs, all_chat_msgs=records)
 
     contacts = _group_by_contact(records, user_name)
     relationships = []
@@ -91,7 +103,6 @@ def build_profile(
         if len(your_msgs_in_chat) < 5:
             continue
 
-        # ── Classify relationship type ────────────────────────────────────────
         rel_type, confidence, rel_signals = classify_relationship(
             user_messages=your_msgs_in_chat,
             all_messages=contact_records,
@@ -101,7 +112,11 @@ def build_profile(
             contact_name=contact_name,
             message_count=len(your_msgs_in_chat),
             style=_extract_style(your_msgs_in_chat),
-            emoji_usage=_extract_emoji_profile(your_msgs_in_chat),
+            # Pass all contact messages so reactions on Priya's messages are found
+            emoji_usage=_extract_emoji_profile(
+                your_msgs_in_chat,
+                all_chat_msgs=contact_records,
+            ),
             tone_notes=_extract_tone_notes(your_msgs_in_chat),
             relationship_type=rel_type,
             relationship_confidence=confidence,
@@ -128,7 +143,6 @@ def _extract_style(messages: list[MessageRecord]) -> StyleProfile:
     if not messages:
         return StyleProfile()
 
-    # Filter to text-only messages (no media, non-empty)
     text_msgs = [m for m in messages if m.content.strip()]
     if not text_msgs:
         return StyleProfile()
@@ -139,30 +153,21 @@ def _extract_style(messages: list[MessageRecord]) -> StyleProfile:
     avg_char = sum(char_counts) / len(char_counts)
     avg_word = sum(word_counts) / len(word_counts)
 
-    # Capitalisation: what % of messages start with lowercase?
     lowercase_starts = sum(
         1 for m in text_msgs
         if m.content and m.content[0].islower()
     )
     uses_lowercase_heavily = (lowercase_starts / len(text_msgs)) > 0.6
 
-    # Punctuation: do messages frequently end with . ! ? etc.?
     punct_endings = sum(
         1 for m in text_msgs
         if m.content and m.content[-1] in ".!?,"
     )
     uses_punctuation = (punct_endings / len(text_msgs)) > 0.3
 
-    # Openers: first meaningful word of each message
     openers = _extract_openers(text_msgs)
-
-    # Closers: last meaningful word/token of each message
     closers = _extract_closers(text_msgs)
-
-    # Slang tokens found
     slang = _extract_slang(text_msgs)
-
-    # Quirks (behavioural patterns)
     quirks = _detect_quirks(text_msgs, uses_lowercase_heavily)
 
     return StyleProfile(
@@ -178,7 +183,6 @@ def _extract_style(messages: list[MessageRecord]) -> StyleProfile:
 
 
 def _extract_openers(messages: list[MessageRecord]) -> list[str]:
-    """Most common first words/phrases."""
     opener_counter: Counter = Counter()
     for m in messages:
         words = m.content.lower().split()
@@ -187,7 +191,6 @@ def _extract_openers(messages: list[MessageRecord]) -> list[str]:
         first = words[0].strip(".,!?\"'")
         if first and first not in FILLER_TOKENS and len(first) > 1:
             opener_counter[first] += 1
-        # Also capture two-word openers
         if len(words) >= 2:
             bigram = f"{first} {words[1].strip('.,!?\"\'')}"
             opener_counter[bigram] += 1
@@ -195,7 +198,6 @@ def _extract_openers(messages: list[MessageRecord]) -> list[str]:
 
 
 def _extract_closers(messages: list[MessageRecord]) -> list[str]:
-    """Most common last tokens (often reaction words like 'lol', 'haha')."""
     closer_counter: Counter = Counter()
     for m in messages:
         words = m.content.lower().split()
@@ -208,7 +210,6 @@ def _extract_closers(messages: list[MessageRecord]) -> list[str]:
 
 
 def _extract_slang(messages: list[MessageRecord]) -> list[str]:
-    """Slang/informal tokens the user actually uses."""
     found: Counter = Counter()
     for m in messages:
         tokens = set(re.findall(r"[a-z']+", m.content.lower()))
@@ -219,38 +220,31 @@ def _extract_slang(messages: list[MessageRecord]) -> list[str]:
 
 
 def _detect_quirks(messages: list[MessageRecord], uses_lowercase: bool) -> list[str]:
-    """Detect consistent typing patterns."""
     quirks: list[str] = []
 
     if uses_lowercase:
         quirks.append("no caps")
 
-    # Trailing dots (...)
     trailing_dots = sum(1 for m in messages if m.content.endswith("..."))
     if trailing_dots / len(messages) > 0.08:
         quirks.append("trailing dots...")
 
-    # Excessive exclamation marks
     exclamation = sum(1 for m in messages if "!!" in m.content)
     if exclamation / len(messages) > 0.1:
         quirks.append("double !!")
 
-    # Question mark clusters
     q_clusters = sum(1 for m in messages if "??" in m.content)
     if q_clusters / len(messages) > 0.08:
         quirks.append("double ??")
 
-    # Very short messages (≤ 3 words) — texting in bursts
     short = sum(1 for m in messages if m.word_count <= 3)
     if short / len(messages) > 0.5:
         quirks.append("burst texter (many short messages)")
 
-    # Very long messages (≥ 50 words)
     long = sum(1 for m in messages if m.word_count >= 50)
     if long / len(messages) > 0.1:
         quirks.append("sends long messages")
 
-    # Repeated characters (yesssss / noooo)
     repeated_chars = sum(
         1 for m in messages
         if re.search(r'(.)\1{2,}', m.content.lower())
@@ -263,20 +257,29 @@ def _detect_quirks(messages: list[MessageRecord], uses_lowercase: bool) -> list[
 
 # ── Emoji extraction ───────────────────────────────────────────────────────────
 
-def _extract_emoji_profile(messages: list[MessageRecord]) -> EmojiProfile:
-    """Extract emoji usage patterns."""
+def _extract_emoji_profile(
+    messages: list[MessageRecord],
+    all_chat_msgs: list[MessageRecord] | None = None,
+) -> EmojiProfile:
+    """
+    Extract emoji usage patterns from the user's messages.
+
+    Phase 3A addition: if all_chat_msgs is provided, also extract
+    reactions from ALL messages in the conversation. Reactions are
+    stored on the message that was reacted to (often from the other
+    person), so we need the full conversation to find them.
+
+    Args:
+        messages:      Messages sent BY the user (for emoji-in-text analysis)
+        all_chat_msgs: All messages in the conversation (for reaction extraction)
+    """
     msgs_with_emoji = [m for m in messages if m.has_emoji]
-    if not msgs_with_emoji:
-        return EmojiProfile()
 
     all_emojis: list[str] = []
-
     for m in msgs_with_emoji:
         if EMOJI_LIB_AVAILABLE:
-            # Use the emoji library for accurate extraction
             emojis_in_msg = [e["emoji"] for e in emoji_lib.emoji_list(m.content)]
         else:
-            # Fallback: basic unicode range scan
             emojis_in_msg = _extract_emojis_fallback(m.content)
         all_emojis.extend(emojis_in_msg)
 
@@ -286,11 +289,22 @@ def _extract_emoji_profile(messages: list[MessageRecord]) -> EmojiProfile:
     top = counter.most_common(10)
     frequency = total / len(messages) if messages else 0.0
 
+    # ── Phase 3A: reaction extraction ─────────────────────────────────────────
+    # Aggregate reactions the user gave to messages (Telegram only).
+    # Reactions appear on all_chat_msgs (including messages from others).
+    reaction_counter: Counter = Counter()
+    if all_chat_msgs:
+        for msg in all_chat_msgs:
+            for reaction_emoji in msg.reactions:
+                reaction_counter[reaction_emoji] += 1
+
     return EmojiProfile(
         total_emoji_count=total,
         unique_emoji_count=unique,
         top_emojis=top,
         emoji_frequency=round(frequency, 3),
+        reaction_count=sum(reaction_counter.values()),
+        top_reactions=reaction_counter.most_common(8),
     )
 
 
@@ -309,13 +323,9 @@ def _extract_emojis_fallback(text: str) -> list[str]:
     return result
 
 
-# ── Tone notes (LLM-free heuristics) ──────────────────────────────────────────
+# ── Tone notes ─────────────────────────────────────────────────────────────────
 
 def _extract_tone_notes(messages: list[MessageRecord]) -> list[str]:
-    """
-    Lightweight heuristic tone observations for a relationship.
-    These are human-readable labels — no LLM needed.
-    """
     notes: list[str] = []
     total = len(messages)
     if total == 0:
@@ -352,7 +362,6 @@ def _group_by_contact(
     For 1-on-1 chats: the other sender IS the contact.
     For group chats: group by chat_name.
     """
-    # Determine unique senders per chat
     chats: dict[str, list[MessageRecord]] = {}
     for r in records:
         chats.setdefault(r.chat_name, []).append(r)
@@ -361,11 +370,9 @@ def _group_by_contact(
     for chat_name, msgs in chats.items():
         senders = {m.sender for m in msgs}
         if len(senders) == 2:
-            # 1-on-1: contact is whoever isn't the user
             contact = next(s for s in senders if s != user_name)
             result[contact] = msgs
         else:
-            # Group chat: use chat name as key
             result[chat_name] = msgs
 
     return result
@@ -376,12 +383,6 @@ def _group_by_contact(
 def save_profile(profile: CommunicationProfile, path: str | Path) -> Path:
     """
     Save a CommunicationProfile to a JSON file.
-
-    Why JSON?
-    - Human readable — you can open it and verify it makes sense
-    - Pydantic serializes it cleanly (model_dump_json handles datetime, tuples, etc.)
-    - No database needed for Phase 1
-    - Easy to diff in git if you ever want to track profile evolution
 
     Args:
         profile: The profile to save
@@ -414,7 +415,7 @@ def load_profile(path: str | Path) -> CommunicationProfile:
     if not p.exists():
         raise FileNotFoundError(
             f"Profile not found: {p}\n"
-            f"Run setup first: python cli/main.py setup <export_file> --you \"Your Name\""
+            f"Run setup first: python -m cli.main setup <export_file> --you \"Your Name\""
         )
     try:
         return CommunicationProfile.model_validate_json(p.read_text(encoding="utf-8"))

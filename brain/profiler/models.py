@@ -3,15 +3,20 @@ brain/profiler/models.py
 
 Data contracts for PersonaOS.
 
+v3 changes (Phase 3A):
+  MessageRecord:  +reactions field (list[str]) — emoji reactions the user gave
+                  to THIS message. Populated by Telegram parser only.
+                  Always [] for WhatsApp (platform limitation — reactions
+                  are not included in WhatsApp .txt exports).
+
+  EmojiProfile:   +reaction_count, +top_reactions — aggregated from
+                  reactions across all messages in the conversation.
+                  Both default to 0/[] for backward compatibility.
+
 v2 changes:
     RelationshipProfile gains relationship_type + relationship_signals
     CommunicationProfile gains sources_analyzed + total_chats_analyzed
     All new fields have defaults — backward compatible with v1 profiles.
-
-Why Pydantic?
-    Pydantic enforces types at runtime. If a timestamp is not a valid
-    datetime, Pydantic raises immediately — not 500 lines later when
-    something silently computes a wrong number.
 """
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -22,7 +27,7 @@ from datetime import datetime
 
 RELATIONSHIP_TYPES = {
     "close_friend",
-    "college_friend",     
+    "college_friend",
     "academic_peer",
     "family",
     "colleague",
@@ -36,6 +41,13 @@ class MessageRecord(BaseModel):
     """
     A single parsed message from any chat export.
     Atomic unit of the PersonaOS pipeline.
+
+    reactions:
+        Emojis the profiled user sent as reactions TO this message.
+        Populated only for Telegram exports (Telegram JSON includes
+        reaction data; WhatsApp .txt exports do not).
+        Example: if the user reacted 👍 to a message from Priya,
+        that message's reactions list will contain ["👍"].
     """
     timestamp: datetime
     sender: str
@@ -46,14 +58,29 @@ class MessageRecord(BaseModel):
     has_media: bool = False
     word_count: int = 0
     char_count: int = 0
+    reactions: list[str] = Field(default_factory=list)
 
 
 class EmojiProfile(BaseModel):
-    """Emoji usage patterns for a user."""
+    """
+    Emoji usage patterns for a user.
+
+    top_emojis:    Emojis the user sends IN text messages (Phase 1 data)
+    top_reactions: Emojis the user sends AS REACTIONS (Phase 3 / Telegram only)
+
+    These are distinct signals:
+    - top_emojis tells you how the user expresses themselves in messages
+    - top_reactions tells you how they respond to OTHER people's messages
+
+    Both are used by emoji_suggester.py to personalise reaction suggestions.
+    """
     total_emoji_count: int = 0
     unique_emoji_count: int = 0
     top_emojis: list[tuple[str, int]] = []
     emoji_frequency: float = 0.0
+    # Phase 3 additions — reaction data (Telegram exports only)
+    reaction_count: int = 0
+    top_reactions: list[tuple[str, int]] = []
 
 
 class StyleProfile(BaseModel):
@@ -78,6 +105,7 @@ class RelationshipProfile(BaseModel):
 
     relationship_type values:
         "close_friend"       casual, slang-heavy, personal topics
+        "college_friend"     close peer + academic collaboration
         "academic_peer"      academic context (assignments, exams, notes)
         "family"             family address terms detected
         "colleague"          professional/work context

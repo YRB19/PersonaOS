@@ -9,6 +9,10 @@ Commands:
     signals  Show detailed relationship signal breakdown for each contact
     summary  Generate a natural language summary using Ollama
     check    Verify environment and dependencies
+    suggest  Suggest emoji reactions and GIFs for an incoming message
+    store    Embed your messages into ChromaDB for semantic memory retrieval
+    search   Search your past messages by semantic similarity
+    reply    Generate personalized reply drafts for an incoming message
 """
 import sys
 from pathlib import Path
@@ -711,6 +715,112 @@ def reply(
     console.print(
         "\n  [dim]Pick one, edit it, send it yourself. You're in control.[/dim]\n"
     )
+
+
+# ── suggest ────────────────────────────────────────────────────────────────────
+
+@app.command()
+def suggest(
+    incoming: str = typer.Argument(..., help="The incoming message to get suggestions for"),
+    you: str      = typer.Option(..., "--you", "-u", help="Your name (matches profile)"),
+    contact: str  = typer.Option(..., "--contact", "-c", help="Who sent the message"),
+    type: str     = typer.Option(
+        "all", "--type", "-t",
+        help="What to suggest: emoji | gif | all  (default: all)"
+    ),
+    profiles_dir: str = typer.Option("data/profiles", "--dir", "-d"),
+):
+    """
+    Suggest reaction emojis and GIFs for an incoming message.
+
+    Emoji suggestions are fully local (no API needed).
+    GIF suggestions require TENOR_API_KEY in .env (free, 2 min setup).
+
+    Examples:
+        python -m cli.main suggest "lmao bhai 💀" --you "Rishit Babbar" --contact "Shreyansh"
+        python -m cli.main suggest "you free tonight?" --you "Rishit Babbar" --contact "Priya" --type emoji
+        python -m cli.main suggest "got the placement!!" --you "Rishit Babbar" --contact "Dhaval Sethi" --type gif
+    """
+    from brain.media.emoji_suggester import suggest_reactions
+    from brain.media.gif_suggester import search_gifs, build_gif_query
+    from brain.profiler.analyzer import load_profile, profile_path
+
+    # ── Load profile + relationship (best-effort) ──────────────────────────────
+    prof = None
+    relationship = None
+    try:
+        prof = load_profile(profile_path(you, profiles_dir))
+        if prof:
+            contact_l = contact.lower()
+            for rel in prof.relationships:
+                if (rel.contact_name.lower() == contact_l
+                        or contact_l in rel.contact_name.lower()):
+                    relationship = rel
+                    break
+    except Exception:
+        pass
+
+    incoming_preview = incoming[:55] + "..." if len(incoming) > 55 else incoming
+    console.print()
+    console.print(Panel(
+        f"[bold]Media Suggestions[/bold]\n"
+        f"[dim]Message: \"{incoming_preview}\"  ·  From: {contact}[/dim]",
+        style="blue",
+    ))
+
+    rel_label = relationship.relationship_type if relationship else "unknown"
+    console.print(f"  [dim]Relationship: {rel_label}  ·  "
+                  f"Profile: {'loaded' if prof else 'not found (generic suggestions)'}[/dim]\n")
+
+    # ── Emoji / reaction suggestions ───────────────────────────────────────────
+    if type in ("emoji", "all"):
+        reactions = suggest_reactions(
+            incoming,
+            profile=prof,
+            relationship=relationship,
+            top_k=8,
+        )
+
+        if reactions:
+            emoji_row = "  ".join(r.emoji for r in reactions[:8])
+            console.print(f"  [bold]React with:[/bold]  {emoji_row}\n")
+
+            table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+            table.add_column("Emoji", style="bold", min_width=4)
+            table.add_column("Confidence", justify="right", min_width=6)
+            table.add_column("Reason", style="dim")
+
+            for r in reactions[:5]:
+                table.add_row(r.emoji, f"{r.confidence:.0%}", r.reason)
+
+            console.print(table)
+        else:
+            console.print("  [dim]No emoji suggestions.[/dim]")
+
+    # ── GIF suggestions ───────────────────────────────────────────────────────────
+    if type in ("gif", "all"):
+        import os
+        has_key = bool(os.getenv("TENOR_API_KEY", "").strip())
+        gif_query = build_gif_query(incoming, relationship)
+
+        console.print(f"\n  [bold]GIF search query:[/bold]  [cyan]{gif_query}[/cyan]")
+
+        if has_key:
+            gifs = search_gifs(incoming, relationship=relationship)
+            if gifs:
+                console.print(f"  [dim]{len(gifs)} result(s) from Tenor:[/dim]\n")
+                for i, gif in enumerate(gifs, 1):
+                    console.print(f"  [bold cyan]{i}.[/bold cyan]  {gif.title}")
+                    console.print(f"     [dim]{gif.url}[/dim]")
+            else:
+                console.print("  [yellow]⚠[/yellow]  No GIFs returned (check TENOR_API_KEY or try a different query)")
+        else:
+            console.print(
+                "  [dim]Add TENOR_API_KEY to .env for live GIF search.[/dim]\n"
+                "  [dim]Get a free key: https://developers.google.com/tenor/guides/quickstart[/dim]"
+            )
+
+    console.print()
 
 
 # ── check ──────────────────────────────────────────────────────────────────────
