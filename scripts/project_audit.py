@@ -45,7 +45,8 @@ import argparse
 PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_FILE = PROJECT_ROOT / "project_state.txt"
 
-# Files we care about — in logical reading order
+# Files we care about — in logical reading order (priority order for display)
+# All .py files in the project will be discovered automatically
 TRACKED_FILES = [
     # Phase 1 core
     "brain/__init__.py",
@@ -57,21 +58,46 @@ TRACKED_FILES = [
     "brain/profiler/analyzer.py",
     "brain/profiler/signals.py",
     "brain/profiler/classifier.py",
-    # Phase 2
+    # Phase 2A — Memory
     "brain/memory/__init__.py",
     "brain/memory/store.py",
+    # Phase 2B — Generator
     "brain/generator/__init__.py",
     "brain/generator/reply.py",
+    # Phase 3 — Media (emoji/gif suggestions)
+    "brain/media/__init__.py",
+    "brain/media/models.py",
+    "brain/media/emoji_suggester.py",
+    "brain/media/gif_suggester.py",
     # Infrastructure
     "cli/main.py",
     "scripts/setup_check.py",
     "scripts/project_audit.py",
+    "scripts/diagnose.py",
+    "scripts/diagnose_reply.py",
+    "scripts/analyze_signals.py",
     "tests/__init__.py",
     "tests/test_parsers.py",
     "tests/test_store.py",
     "tests/test_signals.py",
     "tests/test_generator.py",
+    "tests/test_media.py",
 ]
+
+# Automatically discover all Python files in the project
+def _discover_all_py_files() -> list[str]:
+    """Discover all .py files in the project (excluding __pycache__, .venv, etc.)."""
+    exclude_dirs = {".venv", "__pycache__", ".git", ".claude-flow", ".vscode", ".claude"}
+    py_files: list[str] = []
+    for root, dirs, files in os.walk(PROJECT_ROOT):
+        # Skip excluded directories
+        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        for f in files:
+            if f.endswith(".py"):
+                full_path = Path(root) / f
+                rel_path = full_path.relative_to(PROJECT_ROOT)
+                py_files.append(str(rel_path))
+    return sorted(py_files)
 
 # Key dependencies to check (subset of requirements.txt)
 KEY_DEPS = [
@@ -95,17 +121,35 @@ PHASES = {
     "Phase 2B — Generator": [
         "brain/generator/reply.py",
     ],
+    "Phase 3 — Media": [
+        "brain/media/models.py",
+        "brain/media/emoji_suggester.py",
+        "brain/media/gif_suggester.py",
+    ],
     "Infrastructure": [
         "cli/main.py",
         "tests/test_parsers.py",
         "tests/test_store.py",
         "tests/test_signals.py",
         "tests/test_generator.py",
+        "tests/test_media.py",
     ],
 }
 
 # A file is a "stub" if it has fewer than this many non-blank, non-comment lines
 STUB_LINE_THRESHOLD = 5
+
+
+def _discover_all_py_files() -> list[str]:
+    """Discover all Python files in the project, relative to PROJECT_ROOT."""
+    py_files: list[str] = []
+    for py_file in PROJECT_ROOT.rglob("*.py"):
+        # Skip virtual environments, __pycache__, .git, and hidden directories
+        parts = py_file.relative_to(PROJECT_ROOT).parts
+        if any(part.startswith(".") or part in ("__pycache__", ".venv", "venv", "env") for part in parts):
+            continue
+        py_files.append(str(py_file.relative_to(PROJECT_ROOT)))
+    return sorted(py_files)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -196,12 +240,21 @@ def _get_environment() -> str:
 
 def _get_file_stats() -> dict[str, dict]:
     """
-    For each tracked file, return:
+    For each Python file in the project (prioritizing TRACKED_FILES order), return:
       exists, total_lines, code_lines, is_stub, docstring, todos, functions, classes
     """
     stats: dict[str, dict] = {}
+    
+    # Discover all Python files in the project
+    all_py_files = _discover_all_py_files()
+    
+    # Build ordered list: TRACKED_FILES first (in order), then remaining discovered files
+    tracked_set = set(TRACKED_FILES)
+    ordered_files = [f for f in TRACKED_FILES if f in all_py_files]
+    remaining = [f for f in all_py_files if f not in tracked_set]
+    ordered_files.extend(remaining)
 
-    for rel_path in TRACKED_FILES:
+    for rel_path in ordered_files:
         path = PROJECT_ROOT / rel_path
         if not path.exists():
             stats[rel_path] = {"exists": False}
