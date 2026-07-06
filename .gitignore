@@ -12,6 +12,7 @@ build/
 data/exports/
 data/profiles/
 data/db/
+custom/profiles/*.json
 
 # Environment
 .env
