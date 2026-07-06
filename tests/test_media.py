@@ -320,6 +320,78 @@ class TestGifSearch:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Giphy response parser — URL scheme validation
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestParseGiphyResponse:
+    """Defensive parsing: only http(s) URLs make it through."""
+
+    def _parse(self, data):
+        from brain.media.gif_suggester import _parse_giphy_response
+        return _parse_giphy_response(data)
+
+    def test_normal_https_urls_accepted(self):
+        data = {"data": [{
+            "title": "ok",
+            "images": {
+                "original": {"url": "https://media.giphy.com/g.gif"},
+                "fixed_height_small": {"url": "https://media.giphy.com/small.gif"},
+            },
+        }]}
+        results = self._parse(data)
+        assert len(results) == 1
+        assert results[0].url == "https://media.giphy.com/g.gif"
+        assert results[0].preview_url == "https://media.giphy.com/small.gif"
+
+    def test_javascript_scheme_rejected(self):
+        data = {"data": [{
+            "title": "xss",
+            "images": {"original": {"url": "javascript:alert(1)"}},
+        }]}
+        assert self._parse(data) == []
+
+    def test_file_scheme_rejected(self):
+        data = {"data": [{
+            "title": "lfi",
+            "images": {"original": {"url": "file:///etc/passwd"}},
+        }]}
+        assert self._parse(data) == []
+
+    def test_data_scheme_rejected(self):
+        data = {"data": [{
+            "title": "data",
+            "images": {"original": {"url": "data:text/html,<script>1</script>"}},
+        }]}
+        assert self._parse(data) == []
+
+    def test_empty_url_rejected(self):
+        data = {"data": [{"title": "x", "images": {"original": {"url": ""}}}]}
+        assert self._parse(data) == []
+
+    def test_unsafe_preview_falls_back_to_safe_main(self):
+        """If preview url is bad but main url is fine, fall back to main."""
+        data = {"data": [{
+            "title": "ok",
+            "images": {
+                "original": {"url": "https://media.giphy.com/g.gif"},
+                "fixed_height_small": {"url": "javascript:bad()"},
+            },
+        }]}
+        results = self._parse(data)
+        assert len(results) == 1
+        assert results[0].url == "https://media.giphy.com/g.gif"
+        assert results[0].preview_url == "https://media.giphy.com/g.gif"
+
+    def test_non_dict_items_skipped(self):
+        data = {"data": ["not a dict", 42, None]}
+        assert self._parse(data) == []
+
+    def test_missing_images_handled(self):
+        data = {"data": [{"title": "no images"}]}
+        assert self._parse(data) == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Telegram Reaction Parsing
 # ══════════════════════════════════════════════════════════════════════════════
 

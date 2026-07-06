@@ -31,6 +31,7 @@ Without an API key:
 import os
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -43,6 +44,11 @@ from brain.profiler.models import RelationshipProfile
 GIPHY_BASE      = "https://api.giphy.com/v1/gifs/search"
 DEFAULT_LIMIT   = 5
 REQUEST_TIMEOUT = 5   # seconds — non-blocking for the CLI
+
+# Only these URL schemes are accepted in Giphy responses.
+# Anything else (javascript:, file:, data:, …) is rejected defensively in case
+# the upstream API or a MITM injects malicious payloads.
+ALLOWED_GIF_SCHEMES = {"https", "http"}
 
 # Stop words stripped before building a Giphy query.
 # Mix of English + common Hinglish function words.
@@ -179,24 +185,50 @@ def _parse_giphy_response(data: dict) -> list[GifResult]:
     We use:
       url         → images.original.url          (full GIF to send)
       preview_url → images.fixed_height_small.url (small preview for listing)
+
+    Only http(s) URLs are accepted; any other scheme (javascript:, file:, data:)
+    is silently rejected to prevent a malicious or compromised upstream from
+    injecting dangerous URLs that downstream renderers might exec.
     """
     results: list[GifResult] = []
 
     for item in data.get("data", []):
+        if not isinstance(item, dict):
+            continue
         images = item.get("images", {})
+        if not isinstance(images, dict):
+            continue
 
-        original     = images.get("original", {})
-        preview      = images.get("fixed_height_small", images.get("preview_gif", {}))
+        original     = images.get("original", {}) or {}
+        preview      = images.get("fixed_height_small", images.get("preview_gif", {})) or {}
 
-        url         = original.get("url", "")
-        preview_url = preview.get("url", url)
+        url         = original.get("url", "") if isinstance(original, dict) else ""
+        preview_url = preview.get("url", url) if isinstance(preview, dict) else url
 
-        if url:
-            results.append(GifResult(
-                title=item.get("title", "GIF"),
-                preview_url=preview_url,
-                url=url,
-                source="giphy",
-            ))
+        url         = url if isinstance(url, str) else ""
+        preview_url = preview_url if isinstance(preview_url, str) else ""
+
+        if not _is_safe_gif_url(url):
+            continue
+        if preview_url and not _is_safe_gif_url(preview_url):
+            preview_url = url   # fall back to the (already-validated) main url
+
+        results.append(GifResult(
+            title=item.get("title", "GIF") if isinstance(item.get("title"), str) else "GIF",
+            preview_url=preview_url or url,
+            url=url,
+            source="giphy",
+        ))
 
     return results
+
+
+def _is_safe_gif_url(url: str) -> bool:
+    """Only accept http(s) URLs with a non-empty host."""
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError):
+        return False
+    return parsed.scheme in ALLOWED_GIF_SCHEMES and bool(parsed.netloc)
