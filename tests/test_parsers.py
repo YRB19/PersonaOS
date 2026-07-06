@@ -443,3 +443,43 @@ class TestMultiFileProfile:
                 f"relationship_type empty for {rel.contact_name}"
             assert isinstance(rel.relationship_confidence, float)
             assert 0.0 <= rel.relationship_confidence <= 1.0
+
+
+# ── profile_path security tests ───────────────────────────────────────────────
+
+class TestProfilePathSecurity:
+    """Regression tests for path-traversal in analyzer.profile_path()."""
+
+    def setup_method(self):
+        from brain.profiler.analyzer import profile_path
+        self.profile_path = profile_path
+
+    def test_normal_name_resolves_inside_profiles_dir(self, tmp_path):
+        p = self.profile_path("Rishit Babbar", profiles_dir=tmp_path)
+        assert p.parent == tmp_path
+        assert p.name == "rishit_babbar.json"
+
+    def test_path_traversal_dotdot_rejected(self, tmp_path):
+        """'../../etc/passwd' must NOT escape the profiles directory."""
+        with pytest.raises(ValueError):
+            self.profile_path("../../etc/passwd", profiles_dir=tmp_path)
+
+    def test_absolute_path_rejected(self, tmp_path):
+        with pytest.raises(ValueError):
+            self.profile_path("/etc/passwd", profiles_dir=tmp_path)
+
+    def test_windows_style_separators_rejected(self, tmp_path):
+        """Backslash path components are rejected for safety (defensive)."""
+        with pytest.raises(ValueError):
+            self.profile_path("..\\..\\windows\\system32", profiles_dir=tmp_path)
+
+    def test_empty_name_after_sanitise_rejected(self, tmp_path):
+        """After stripping separators, an all-separator input must be rejected."""
+        with pytest.raises(ValueError):
+            self.profile_path("../../", profiles_dir=tmp_path)
+
+    def test_case_insensitive_names_collide(self, tmp_path):
+        """'Rishit Babbar' and 'RISHIT BABBAR' resolve to the same file."""
+        a = self.profile_path("Rishit Babbar", profiles_dir=tmp_path)
+        b = self.profile_path("RISHIT BABBAR", profiles_dir=tmp_path)
+        assert a == b

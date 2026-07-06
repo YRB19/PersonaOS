@@ -429,6 +429,32 @@ def profile_path(user_name: str, profiles_dir: str | Path = "data/profiles") -> 
 
     Normalises the name (lowercase, spaces → underscores) so
     'Rishit Babbar' and 'rishit babbar' resolve to the same file.
+
+    SECURITY: the sanitised name must be a single safe path component.
+    Any input containing path separators ('/', '\\'), parent references
+    ('..'), or that reduces to empty after sanitising is rejected.
+    This prevents path traversal via a malicious --you argument like
+    '../../etc/passwd' or '/etc/passwd'.
     """
-    safe_name = user_name.lower().strip().replace(" ", "_")
+    raw = user_name.strip()
+    # Reject any path-control characters outright — they have no business
+    # being in a person's name as it appears in a chat export.
+    if any(ch in raw for ch in ("/", "\\", "\x00")) or ".." in raw:
+        raise ValueError(
+            f"Refusing profile name with path-control characters: {user_name!r}"
+        )
+
+    safe_name = raw.lower().replace(" ", "_").strip("._")
+    if not safe_name:
+        raise ValueError(f"Invalid profile name (empty after sanitise): {user_name!r}")
+
+    base = Path(profiles_dir).resolve()
+    resolved = (base / f"{safe_name}.json").resolve()
+    # Final guard: resolved path must live inside profiles_dir.
+    try:
+        resolved.relative_to(base)
+    except ValueError as e:
+        raise ValueError(
+            f"Refusing to resolve profile path outside {base}: got {resolved}"
+        ) from e
     return Path(profiles_dir) / f"{safe_name}.json"
