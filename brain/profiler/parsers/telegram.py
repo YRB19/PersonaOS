@@ -48,6 +48,14 @@ from pathlib import Path
 from brain.profiler.models import MessageRecord
 
 
+# Hard size limits to bound pathological inputs.
+# Telegram exports are typically a few MB; these caps reject inputs that
+# would otherwise force the parser to build multi-GB in-memory structures.
+MAX_EXPORT_BYTES  = 256 * 1024 * 1024   # 256 MB hard cap on the file
+MAX_MESSAGES      = 2_000_000           # hard cap on parsed messages
+MAX_TEXT_ENTITIES = 10_000             # per-message entity list cap
+MAX_TEXT_CHARS    = 64_000             # per-message reconstructed text cap
+
 # Message types to skip — service events, not actual messages
 SKIP_TYPES = {
     "service",
@@ -81,19 +89,36 @@ def parse_telegram_export(
     if not path.exists():
         raise FileNotFoundError(f"Export file not found: {path}")
 
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+    size = path.stat().st_size
+    if size > MAX_EXPORT_BYTES:
+        raise ValueError(
+            f"Telegram export too large to parse safely: {size / 1e6:.0f} MB "
+            f"(limit {MAX_EXPORT_BYTES / 1e6:.0f} MB)."
+        )
 
-    if "messages" not in data:
+    with open(path, encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in {path}: {e}") from e
+
+    if not isinstance(data, dict) or "messages" not in data:
         raise ValueError(
             f"Unexpected JSON structure in {path}. "
             "Make sure you exported in 'Machine-readable JSON' format."
         )
 
+    if not isinstance(data["messages"], list):
+        raise ValueError(f"'messages' must be a list in {path}.")
+
     resolved_chat_name = chat_name or data.get("name", path.stem)
     records: list[MessageRecord] = []
 
     for msg in data["messages"]:
+        if len(records) >= MAX_MESSAGES:
+            break
+        if not isinstance(msg, dict):
+            continue
         record = _parse_message(msg, resolved_chat_name)
         if record:
             records.append(record)
@@ -205,21 +230,36 @@ def _extract_text(msg: dict) -> str:
     1. A plain string: {"text": "hello"}
     2. A list of entities: {"text": [{"type": "plain", "text": "hello"}, ...]}
     3. Absent (for media-only messages)
+
+    Bounded: reconstruction iterates at most MAX_TEXT_ENTITIES items
+    and the resulting string is truncated at MAX_TEXT_CHARS (DoS guard).
     """
     raw = msg.get("text", "")
 
     if isinstance(raw, str):
-        return raw.strip()
+        return raw[:MAX_TEXT_CHARS].strip()
 
     if isinstance(raw, list):
         parts: list[str] = []
-        for entity in raw:
+        total = 0
+        for i, entity in enumerate(raw):
+            if i >= MAX_TEXT_ENTITIES:
+                break
             if isinstance(entity, str):
-                parts.append(entity)
+                piece = entity
             elif isinstance(entity, dict):
                 entity_type = entity.get("type", "plain")
-                if entity_type not in SKIP_ENTITY_TYPES:
-                    parts.append(entity.get("text", ""))
+                if entity_type in SKIP_ENTITY_TYPES:
+                    continue
+                piece = entity.get("text", "")
+            else:
+                continue
+            if total + len(piece) > MAX_TEXT_CHARS:
+                piece = piece[: MAX_TEXT_CHARS - total]
+            parts.append(piece)
+            total += len(piece)
+            if total >= MAX_TEXT_CHARS:
+                break
         return "".join(parts).strip()
 
     return ""

@@ -6,6 +6,7 @@ Run with: pytest tests/ -v
 
 Tests use fixtures from tests/fixtures/ — no real personal data.
 """
+import json
 import pytest
 from pathlib import Path
 
@@ -188,6 +189,82 @@ class TestTelegramParser:
         records = self.parse(fixture)
         timestamps = [r.timestamp for r in records]
         assert timestamps == sorted(timestamps)
+
+    def test_rejects_oversized_file(self, tmp_path):
+        """A file larger than MAX_EXPORT_BYTES should raise, not load."""
+        from brain.profiler.parsers import telegram as tg
+        fixture = tmp_path / "huge.json"
+        # Patch the cap down to make the test fast.
+        original = tg.MAX_EXPORT_BYTES
+        try:
+            tg.MAX_EXPORT_BYTES = 1024
+            fixture.write_text("x" * 2048, encoding="utf-8")
+            with pytest.raises(ValueError, match="too large"):
+                self.parse(fixture)
+        finally:
+            tg.MAX_EXPORT_BYTES = original
+
+    def test_rejects_non_message_json(self, tmp_path):
+        """A JSON doc without 'messages' key must raise ValueError."""
+        bad = tmp_path / "not_telegram.json"
+        bad.write_text('{"foo": "bar"}', encoding="utf-8")
+        with pytest.raises(ValueError, match="Unexpected JSON structure"):
+            self.parse(bad)
+
+    def test_messages_must_be_list(self, tmp_path):
+        """'messages' value must be a list — otherwise raise."""
+        bad = tmp_path / "not_list.json"
+        bad.write_text('{"messages": "not a list"}', encoding="utf-8")
+        with pytest.raises(ValueError, match="must be a list"):
+            self.parse(bad)
+
+    def test_truncates_pathologically_long_text(self, tmp_path):
+        """A single message with millions of text entities must not OOM."""
+        from brain.profiler.parsers import telegram as tg
+        original_chars = tg.MAX_TEXT_CHARS
+        original_entities = tg.MAX_TEXT_ENTITIES
+        try:
+            tg.MAX_TEXT_CHARS = 100
+            tg.MAX_TEXT_ENTITIES = 50
+            huge_text_entities = [{"type": "plain", "text": "a" * 50}] * 5000
+            data = {
+                "name": "Bomb",
+                "type": "personal_chat",
+                "messages": [
+                    {
+                        "id": 1, "type": "message",
+                        "date": "2024-01-01T10:00:00",
+                        "from": "Rishit", "from_id": "u1",
+                        "text": huge_text_entities,
+                    }
+                ],
+            }
+            fixture = tmp_path / "bomb.json"
+            fixture.write_text(json.dumps(data), encoding="utf-8")
+            records = self.parse(fixture)
+            assert len(records) == 1
+            assert len(records[0].content) <= 100
+        finally:
+            tg.MAX_TEXT_CHARS = original_chars
+            tg.MAX_TEXT_ENTITIES = original_entities
+
+    def test_skips_non_dict_messages(self, tmp_path):
+        """Non-dict entries in messages[] are skipped, not crash."""
+        data = {
+            "name": "Test", "type": "personal_chat",
+            "messages": [
+                "just a string",
+                42,
+                {"id": 1, "type": "message",
+                 "date": "2024-01-01T10:00:00",
+                 "from": "Rishit", "text": "ok"},
+            ],
+        }
+        p = tmp_path / "mixed.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        records = self.parse(p)
+        assert len(records) == 1
+        assert records[0].sender == "Rishit"
 
 
 # ── Analyzer Tests ─────────────────────────────────────────────────────────────
