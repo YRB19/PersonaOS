@@ -121,6 +121,28 @@ class TestWhatsAppParser:
         result = self.try_parse_line("this is a continuation line")
         assert result is None
 
+    def test_huge_continuation_is_bounded(self, tmp_path):
+        """A pathological single 'message' with no new timestamp must not OOM."""
+        from brain.profiler.parsers import whatsapp as wa
+        # Construct a real export: one timestamp header, then 100k junk lines
+        # with no timestamp. Without the cap this would accumulate ~10 MB in
+        # a single record's content string.
+        path = tmp_path / "huge.txt"
+        lines = ["01/01/2024, 10:01 - Rishit: hi"]
+        lines.extend(["x" * 500] * 100_000)
+        path.write_text("\n".join(lines), encoding="utf-8")
+
+        original = wa.MAX_RECORD_CHARS
+        try:
+            wa.MAX_RECORD_CHARS = 4096
+            records = self.parse(path)
+            assert len(records) >= 1
+            # Even with 100k continuation lines (~50 MB of input), the single
+            # resulting record's content must be at most ~4 KB + the cap.
+            assert len(records[0].content) <= wa.MAX_RECORD_CHARS + 5000
+        finally:
+            wa.MAX_RECORD_CHARS = original
+
 
 # ── Telegram Parser Tests ──────────────────────────────────────────────────────
 

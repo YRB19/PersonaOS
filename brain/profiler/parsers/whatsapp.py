@@ -68,6 +68,12 @@ CONTENT_SUFFIXES_TO_STRIP = [
     "<This message was edited>",
 ]
 
+# ── Per-record guardrails ───────────────────────────────────────────────────────
+# Cap pathological multi-line messages so a single un-timestamped block cannot
+# grow arbitrarily large in memory. Real WhatsApp messages rarely exceed
+# a few thousand chars; 64 KB is a generous upper bound.
+MAX_RECORD_CHARS = 64_000
+
 # File attachment patterns — WhatsApp shows these as text when exported without media
 ATTACHMENT_PATTERNS = [
     re.compile(r'\.(vcf|pdf|docx?|xlsx?|pptx?|zip|mp3|mp4|mov|avi)\s*\(file attached\)$', re.IGNORECASE),
@@ -125,7 +131,10 @@ def parse_whatsapp_export(
         else:
             # Multi-line message continuation
             if current_record:
-                current_record["content"] += "\n" + line.strip()
+                addition = line.strip()
+                # Cap pathological growth: stop appending past MAX_RECORD_CHARS.
+                if len(current_record["content"]) < MAX_RECORD_CHARS:
+                    current_record["content"] += "\n" + addition
 
     # Flush the last record
     if current_record:
