@@ -361,15 +361,18 @@ def signals(
                 console.print(f"    [dim]→[/dim] {sig}")
 
         # Show winning classification
-        best_type, best_conf = max(
-            ((t, c) for t, (c, _) in all_scores.items()),
-            key=lambda x: x[1],
-        )
-        console.print(
-            f"\n  [bold]→ Classified as:[/bold] "
-            f"[{TYPE_COLOURS.get(best_type, 'white')}]{best_type}[/{TYPE_COLOURS.get(best_type, 'white')}]"
-            f"  ({best_conf:.0%} confidence)"
-        )
+        if all_scores:
+            best_type, best_conf = max(
+                ((t, c) for t, (c, _) in all_scores.items()),
+                key=lambda x: x[1],
+            )
+            console.print(
+                f"\n  [bold]→ Classified as:[/bold] "
+                f"[{TYPE_COLOURS.get(best_type, 'white')}]{best_type}[/{TYPE_COLOURS.get(best_type, 'white')}]"
+                f"  ({best_conf:.0%} confidence)"
+            )
+        else:
+            console.print("\n  [dim]No scores above zero — cannot classify[/dim]")
 
     console.print()
 
@@ -829,10 +832,24 @@ def suggest(
 def check():
     """Verify environment, dependencies, and data directories."""
     import subprocess
-    result = subprocess.run(
-        [sys.executable, "scripts/setup_check.py"],
-        cwd=Path(__file__).parent.parent,
-    )
+    script = Path(__file__).parent.parent / "scripts" / "setup_check.py"
+    if not script.is_file():
+        console.print(f"[red]✗[/red]  Setup check script not found: {script}")
+        raise typer.Exit(1)
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=Path(__file__).parent.parent,
+            check=False,
+            shell=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        console.print("[red]✗[/red]  Setup check timed out after 30s")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]✗[/red]  Failed to run setup check: {e}")
+        raise typer.Exit(1)
     raise typer.Exit(result.returncode)
 
 
