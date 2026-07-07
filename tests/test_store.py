@@ -110,6 +110,18 @@ class TestHelpers:
         assert "$and" in result
         assert len(result["$and"]) == 2
 
+    def test_build_where_bounds_long_filters(self):
+        """Pathologically long filter strings must be truncated."""
+        long_sender = "X" * 10_000
+        result = _build_where(long_sender, None)
+        assert result == {"sender": {"$eq": "X" * 256}}
+        assert len(result["sender"]["$eq"]) == 256
+
+    def test_build_where_non_str_filter_coerced(self):
+        """Non-string filters are coerced to strings, not crashed."""
+        result = _build_where(123, None)  # type: ignore[arg-type]
+        assert result == {"sender": {"$eq": "123"}}
+
 
 # ── PersonaStore ───────────────────────────────────────────────────────────────
 

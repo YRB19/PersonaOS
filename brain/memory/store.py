@@ -278,20 +278,33 @@ def _build_where(
     chat_filter: str | None,
 ) -> dict | None:
     """
-    Build a ChromaDB where-filter dict.
+    Build a ChromaDB 'where' filter dict.
 
     Single:   {"sender": {"$eq": "Rishit"}}
     Multiple: {"$and": [{"sender": ...}, {"chat_name": ...}]}
     None:     no filtering
+
+    Defense-in-depth: filter strings are capped at MAX_FILTER_CHARS so a
+    pathological input cannot degrade query behaviour or push the model
+    off-task.
     """
     conditions: list[dict] = []
     if sender_filter:
-        conditions.append({"sender": {"$eq": sender_filter}})
+        conditions.append({"sender": {"$eq": _bound_filter(sender_filter)}})
     if chat_filter:
-        conditions.append({"chat_name": {"$eq": chat_filter}})
+        conditions.append({"chat_name": {"$eq": _bound_filter(chat_filter)}})
 
     if not conditions:
         return None
     if len(conditions) == 1:
         return conditions[0]
     return {"$and": conditions}
+
+
+MAX_FILTER_CHARS = 256
+
+
+def _bound_filter(value: str) -> str:
+    if not isinstance(value, str):
+        value = str(value)
+    return value[:MAX_FILTER_CHARS]
