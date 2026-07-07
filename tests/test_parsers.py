@@ -442,11 +442,11 @@ class TestRelationshipClassifier:
             f"Expected academic_peer or close_friend, got {rel_type}"
 
     def test_family_signals(self):
-        """Family terms → family classification."""
+        """Family terms + logistics → family classification."""
         msgs = (
-            [_make_msg("Rishit", "haan papa aa raha hun", hour=18)] * 6
-            + [_make_msg("Rishit", "maa khaana ready hai kya", hour=19)] * 6
-            + [_make_msg("Rishit", "bhai ghar pe hai tu", hour=20)] * 6
+            [_make_msg("Rishit", "haan papa ghar pahuch gaya", hour=18)] * 6
+            + [_make_msg("Rishit", "maa khana khaya kya", hour=19)] * 6
+            + [_make_msg("Rishit", "didi ghar aa gayi kya", hour=20)] * 6
         )
         rel_type, confidence, signals = self.classify(msgs, msgs)
         assert rel_type == "family", f"Expected family, got {rel_type}"

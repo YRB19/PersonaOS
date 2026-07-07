@@ -141,12 +141,12 @@ class TestCompoundSignals:
         assert _is_college_friend_compound("bhai kya scene hai") is False
 
     def test_family_compound_maa(self):
-        """maa (unambiguous) → family compound."""
-        assert _is_family_compound("maa ghar kab aa rahi hai") is True
+        """maa (unambiguous) + logistics → family compound."""
+        assert _is_family_compound("maa ghar pahuch gayi kya") is True
 
     def test_family_compound_papa(self):
-        """papa → family compound."""
-        assert _is_family_compound("papa ne kaha tha subah aana") is True
+        """papa + logistics → family compound."""
+        assert _is_family_compound("papa khana khaya kya") is True
 
     def test_no_family_compound_bhai_alone(self):
         """bhai alone no longer triggers family compound."""
@@ -299,10 +299,10 @@ class TestClassifierContextAware:
         assert confidence > 0.40
 
     def test_family_requires_strong_terms(self):
-        """Family classification now requires unambiguous terms like maa/papa."""
+        """Family classification now requires unambiguous terms like maa/papa + logistics."""
         msgs = (
-            [_msg("Rishit", "haan papa aa raha hun ghar", hour=18)] * 6 +
-            [_msg("Rishit", "maa khana ready hai kya", hour=19)] * 6 +
+            [_msg("Rishit", "haan papa ghar pahuch gaya", hour=18)] * 6 +
+            [_msg("Rishit", "maa khana khaya kya", hour=19)] * 6 +
             [_msg("Rishit", "didi kal aa rahi hai kya", hour=20)] * 6
         )
         rel_type, confidence, _ = classify_relationship(msgs, msgs)

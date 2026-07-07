@@ -307,7 +307,12 @@ def _is_family_compound(text: str) -> bool:
     text_l = text.lower()
     has_strong_family = any(w in text_l.split() for w in FAMILY_STRONG)
     # "bhai" alone is NOT a strong family term
-    return has_strong_family
+    if not has_strong_family:
+        return False
+    # Also require a logistics/check-in phrase to confirm family context
+    # (parent/sibling asking about daily routine = strong family signal)
+    has_logistics = any(phrase in text_l for phrase in CHECKIN_PHRASES)
+    return has_logistics
 
 
 def _is_planning_compound(text: str) -> bool:
