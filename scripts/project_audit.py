@@ -84,21 +84,6 @@ TRACKED_FILES = [
     "tests/test_media.py",
 ]
 
-# Automatically discover all Python files in the project
-def _discover_all_py_files() -> list[str]:
-    """Discover all .py files in the project (excluding __pycache__, .venv, etc.)."""
-    exclude_dirs = {".venv", "__pycache__", ".git", ".claude-flow", ".vscode", ".claude"}
-    py_files: list[str] = []
-    for root, dirs, files in os.walk(PROJECT_ROOT):
-        # Skip excluded directories
-        dirs[:] = [d for d in dirs if d not in exclude_dirs]
-        for f in files:
-            if f.endswith(".py"):
-                full_path = Path(root) / f
-                rel_path = full_path.relative_to(PROJECT_ROOT)
-                py_files.append(str(rel_path))
-    return sorted(py_files)
-
 # Key dependencies to check (subset of requirements.txt)
 KEY_DEPS = [
     "pydantic", "python_dotenv", "rich", "typer", "ollama",
