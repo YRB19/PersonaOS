@@ -1,23 +1,29 @@
-# ── Core ──────────────────────────────────────────────
+# ── Core ──────────────────────────────────────────────────────────────────────
 pydantic>=2.0.0          # Data models — typed, validated
 python-dotenv            # Load .env variables safely
 
-# ── CLI / DX ──────────────────────────────────────────
+# ── CLI / DX ──────────────────────────────────────────────────────────────────
 rich                     # Beautiful terminal output
 typer[all]               # CLI framework (built on Click)
 
-# ── LLM ───────────────────────────────────────────────
+# ── LLM ───────────────────────────────────────────────────────────────────────
 ollama                   # Python client for your local Ollama
 
-# ── Embeddings (Phase 2 — install now, use later) ─────
+# ── Embeddings ────────────────────────────────────────────────────────────────
 sentence-transformers    # Local text embeddings, no API needed
 
-# ── Vector DB (Phase 2 — install now, use later) ──────
+# ── Vector DB ─────────────────────────────────────────────────────────────────
 chromadb                 # Local vector store, SQLite-backed
 
-# ── Text utilities ────────────────────────────────────
+# ── Text utilities ─────────────────────────────────────────────────────────────
 emoji                    # Emoji detection and analysis
+requests                 # HTTP client for Giphy API
 
-# ── Testing ───────────────────────────────────────────
+# ── Phase 3.5 — Brain API Server ──────────────────────────────────────────────
+fastapi                  # API framework
+uvicorn[standard]        # ASGI server (run: python -m cli.main serve)
+
+# ── Testing ───────────────────────────────────────────────────────────────────
 pytest
 pytest-cov
+httpx                    # Required by FastAPI TestClient

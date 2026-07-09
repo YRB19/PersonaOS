@@ -15,6 +15,7 @@ Commands:
     reply    Generate personalized reply drafts for an incoming message
 """
 import sys
+import os
 from pathlib import Path
 import typer
 from rich.console import Console
@@ -644,6 +645,14 @@ def reply(
     model: str    = typer.Option("qwen3.5:9b", "--model", "-m"),
     db: str       = typer.Option("data/db/chroma", "--db"),
     profiles_dir: str = typer.Option("data/profiles", "--dir", "-d"),
+    tone: str = typer.Option(None, "--tone", "-t",
+                             help="Tone override: casual, formal, funny, direct, warm, professional"),
+    pick: int = typer.Option(None, "--pick", "-p",
+                             help="Which draft number you chose (1-indexed). Records feedback."),
+    reject: str = typer.Option(None, "--reject", "-r",
+                               help="Comma-separated draft numbers rejected. Use with --pick."),
+    explain: bool = typer.Option(False, "--explain", "-e",
+                                 help="Print which RAG examples influenced each draft"),
 ):
     """
     Generate personalized reply drafts for an incoming message.
@@ -653,6 +662,8 @@ def reply(
     Examples:
         python -m cli.main reply "are you free tonight?" --you "Rishit Babbar" --contact "Priya"
         python -m cli.main reply "bhai notes bhej de" --you "Rishit Babbar" --contact "Shreyansh" --num 5
+        python -m cli.main reply "are you free?" --you "Rishit Babbar" --contact "Priya" --tone funny
+        python -m cli.main reply "notes bhej de" --you "Rishit Babbar" --contact "Shreyansh" --pick 2 --reject 1,3
     """
     from brain.memory.store import PersonaStore
     from brain.generator.reply import ReplyGenerator
@@ -660,9 +671,10 @@ def reply(
 
     console.print()
     incoming_preview = incoming[:60] + "..." if len(incoming) > 60 else incoming
+    tone_info = f"  Tone: {tone}" if tone else ""
     console.print(Panel(
         f"[bold]Generating reply drafts[/bold]\n"
-        f"[dim]From: {contact}  ·  \"{incoming_preview}\"[/dim]",
+        f"[dim]From: {contact}  ·  \"{incoming_preview}\"{tone_info}[/dim]",
         style="blue",
     ))
 
@@ -686,16 +698,25 @@ def reply(
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), transient=True) as progress:
         task = progress.add_task(f"Asking {model} to write like you...", total=None)
         try:
-            drafts = gen.generate(
+            drafts, explainability = gen.generate(
                 incoming=incoming,
                 from_contact=contact,
                 user_name=you,
                 num_drafts=num,
+                tone=tone,
             )
             progress.update(task, description="Done.")
         except RuntimeError as e:
             console.print(f"\n[red]✗[/red] {e}\n")
             raise typer.Exit(1)
+
+    # ── Smart silence short-circuit ───────────────────────────────────────────
+    if not drafts and explainability.get("silence_skip"):
+        console.print(
+            f"\n[dim]Skipped — low-value acknowledgment ('"
+            f"{explainability.get('silence_reason', 'ack')}'). Nothing to draft.[/dim]\n"
+        )
+        raise typer.Exit(0)
 
     # ── Display ────────────────────────────────────────────────────────────────
     if not drafts:
@@ -715,9 +736,143 @@ def reply(
             border_style=style,
         ))
 
+    # ── v6: feedback recording ─────────────────────────────────────────────────
+    if pick is not None:
+        try:
+            from brain.generator.feedback import FeedbackStore
+            from brain.profiler.analyzer import load_profile, profile_path
+            fb = FeedbackStore()
+            rejected_indices: list[int] = []
+            if reject:
+                rejected_indices = [int(x.strip()) for x in reject.split(",") if x.strip().isdigit()]
+            rejected_texts = [
+                drafts[idx - 1] for idx in rejected_indices
+                if 1 <= idx <= len(drafts)
+            ]
+            chosen_text = drafts[pick - 1] if 1 <= pick <= len(drafts) else ""
+            # Best-effort: load profile for relationship type
+            rel_type = "unknown"
+            try:
+                prof = load_profile(profile_path(you, profiles_dir))
+                cl = contact.lower()
+                for rel in prof.relationships:
+                    if (rel.contact_name.lower() == cl
+                            or cl in rel.contact_name.lower()):
+                        rel_type = rel.relationship_type
+                        break
+            except Exception:
+                pass
+            fb.record(
+                incoming=incoming,
+                chosen=chosen_text,
+                rejected=rejected_texts,
+                contact=contact,
+                user=you,
+                rel_type=rel_type,
+            )
+            console.print(f"  [dim]✓ Feedback recorded (chose #{pick})[/dim]")
+        except Exception as e:
+            console.print(f"  [dim]⚠ Could not record feedback: {e}[/dim]")
+
+    # ── v6: explain mode ──────────────────────────────────────────────────────
+    if explain:
+        # Explainability record (from intent_sensors pipeline)
+        try:
+            from brain.generator.reply import ReplyGenerator
+            expl = gen.last_explainability()
+            if expl:
+                console.print(f"\n  [bold]── Why these drafts ──[/bold]")
+                console.print(f"  [dim]Intent:[/dim]    {expl.get('intent', '?')}")
+                console.print(f"  [dim]Emotion:[/dim]   {expl.get('emotion', '?')}")
+                if expl.get("stage", "unknown") != "unknown":
+                    console.print(f"  [dim]Stage:[/dim]     {expl.get('stage')}")
+                console.print(f"  [dim]Language:[/dim]  {expl.get('language', '?')}")
+                console.print(f"  [dim]Relationship:[/dim] {expl.get('relationship_label', '?')}")
+                n_ex = expl.get("retrieved_examples_count", 0)
+                console.print(f"  [dim]RAG examples:[/dim] {n_ex}")
+                for preview in expl.get("retrieved_example_previews", [])[:3]:
+                    console.print(f"    [dim]→[/dim] \"{preview}\"")
+        except Exception:
+            pass
+
+        # Show the RAG examples actually retrieved, for cross-checking.
+        try:
+            examples_for_explain = gen._retrieve_examples_hybrid(incoming, you, contact)
+            if examples_for_explain:
+                console.print(f"\n  [bold]RAG examples retrieved:[/bold]")
+                for j, ex in enumerate(examples_for_explain, 1):
+                    chat_label = f"[dim]{ex.get('chat_name', '')}[/dim] " if ex.get("chat_name") else ""
+                    sim_pct = f"{ex.get('similarity', 0) * 100:.0f}%"
+                    console.print(
+                        f"  [dim]{j}.[/dim]  [{sim_pct}]  {chat_label}"
+                        f"{ex.get('content', '')[:80]}"
+                    )
+            else:
+                console.print(f"\n  [dim]No RAG examples found.[/dim]")
+        except Exception:
+            pass
+
     console.print(
         "\n  [dim]Pick one, edit it, send it yourself. You're in control.[/dim]\n"
     )
+
+
+# ── feedback ────────────────────────────────────────────────────────────────────
+
+@app.command()
+def feedback(
+    you: str = typer.Argument(..., help="Name used when running setup / store"),
+    recent: bool = typer.Option(False, "--recent", "-r", help="Show last 10 feedback entries"),
+    profiles_dir: str = typer.Option("data/profiles", "--dir", "-d"),
+):
+    """
+    Show feedback stats for a user.
+
+    Examples:
+        python -m cli.main feedback "Rishit Babbar"
+        python -m cli.main feedback "Rishit Babbar" --recent
+    """
+    from brain.generator.feedback import FeedbackStore
+
+    fb = FeedbackStore()
+    s = fb.stats(you)
+
+    console.print()
+    console.print(Panel(
+        f"[bold]Feedback Stats — {you}[/bold]",
+        style="blue",
+    ))
+
+    console.print(f"\n  Total recorded:    [bold]{s['total_recorded']}[/bold]")
+    console.print(f"  Accepted replies:  [green]{s['accepted_count']}[/green]")
+    console.print(f"  Rejected replies:  [red]{s['rejected_count']}[/red]")
+    console.print(f"  Acceptance rate:   [cyan]{s['acceptance_rate']:.0%}[/cyan]")
+
+    if s['top_accepted_patterns']:
+        console.print(f"\n  [bold]Recent accepted replies:[/bold]")
+        for pat in s['top_accepted_patterns'][:5]:
+            console.print(f"    [dim]→[/dim] {pat}")
+
+    if recent:
+        from brain.generator.feedback import FeedbackStore as FS
+        fb2 = FS()
+        entries = fb2._read_entries(you)
+        if entries:
+            console.print(f"\n  [bold]Last {min(10, len(entries))} entries:[/bold]\n")
+            for entry in entries[-10:]:
+                contact = entry.get("contact_name", "?")
+                chosen = entry.get("chosen_reply", "")
+                rejected = entry.get("rejected_replies", [])
+                ts = entry.get("timestamp", "")[:19]
+                console.print(f"  [dim]{ts}[/dim]  —  {contact}")
+                console.print(f"    ✓ [green]{chosen[:60]}[/green]")
+                if rejected:
+                    for r in rejected:
+                        console.print(f"    ✗ [red]{r[:60]}[/red]")
+                console.print()
+        else:
+            console.print("\n  [dim]No entries recorded yet.[/dim]\n")
+    console.print()
 
 
 # ── suggest ────────────────────────────────────────────────────────────────────
@@ -935,6 +1090,52 @@ def _print_profile_summary(profile, name: str):
 
     console.print(rel_table)
     console.print()
+
+
+# ── serve ─────────────────────────────────────────────────────────────────────
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", "-H", help="Bind address"),
+    port: int = typer.Option(8765, "--port", "-p", help="Port number"),
+    reload: bool = typer.Option(False, "--reload", "-r", help="Auto-reload on file changes (dev)"),
+    db: str = typer.Option("data/db/chroma", "--db", help="ChromaDB path"),
+    profiles_dir: str = typer.Option("data/profiles", "--dir", "-d", help="Profiles directory"),
+    model: str = typer.Option("qwen3.5:9b", "--model", "-m", help="Ollama model"),
+):
+    """Start the PersonaOS Brain API server (Phase 3.5)."""
+    import os
+    os.environ.setdefault("CHROMA_PATH", db)
+    os.environ.setdefault("PROFILES_DIR", profiles_dir)
+    os.environ.setdefault("OLLAMA_MODEL", model)
+    os.environ.setdefault("API_HOST", host)
+    os.environ.setdefault("API_PORT", str(port))
+
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]✗[/red] uvicorn not installed. Run: pip install uvicorn")
+        raise typer.Exit(1)
+
+    console.print(
+        Panel(
+            f"[bold cyan]PersonaOS Brain API[/bold cyan]  v0.3.5\n\n"
+            f"  [dim]http://{host}:{port}/docs[/dim]     ← Swagger UI\n"
+            f"  [dim]http://{host}:{port}/health[/dim]   ← Liveness check\n\n"
+            f"  Model:    [green]{model}[/green]\n"
+            f"  DB:       [dim]{db}[/dim]\n"
+            f"  Profiles: [dim]{profiles_dir}[/dim]",
+            title="[bold]Starting[/bold]",
+            border_style="cyan",
+        )
+    )
+
+    uvicorn.run(
+        "api.server:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
 
 
 if __name__ == "__main__":

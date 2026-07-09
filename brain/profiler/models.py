@@ -3,6 +3,12 @@ brain/profiler/models.py
 
 Data contracts for PersonaOS.
 
+v4 changes (reply-system-v6):
+  FeedbackSummary   — stats model for the user feedback loop.
+                      Computed on read from the feedback JSONL store,
+                      never persisted. Reports acceptance rate and
+                      top patterns.
+
 v3 changes (Phase 3A):
   MessageRecord:  +reactions field (list[str]) — emoji reactions the user gave
                   to THIS message. Populated by Telegram parser only.
@@ -129,6 +135,20 @@ class RelationshipProfile(BaseModel):
     relationship_type: str = "unknown"
     relationship_confidence: float = 0.0
     relationship_signals: list[str] = []
+
+
+class FeedbackSummary(BaseModel):
+    """
+    Stats about user feedback on generated reply drafts.
+
+    Computed on read from the feedback JSONL store — never persisted.
+    Reports acceptance rate and top patterns.
+    """
+    total_recorded: int = 0
+    accepted_count: int = 0
+    rejected_count: int = 0
+    acceptance_rate: float = 0.0
+    top_accepted_patterns: list[str] = []
 
 
 class CommunicationProfile(BaseModel):

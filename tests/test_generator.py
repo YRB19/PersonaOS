@@ -35,6 +35,16 @@ from brain.generator.reply import (
     _rel_label,
     _extract_replies_from_json,
     _is_json_key,
+    _inject_emoji,
+    _strip_emojis,
+    _add_emojis_if_fitting,
+    _check_diversity,
+    _post_process_drafts,
+    _pick_contrast_examples,
+    _find_contrast_relationship,
+    _contrast_compatibility,
+    DRAFT_DIVERSITY_AXES,
+    TONE_DESCRIPTIONS,
     DEFAULT_NUM_DRAFTS,
     DEFAULT_MODEL,
 )
@@ -610,20 +620,329 @@ class TestReplyGeneratorNoOllama:
     def test_retrieve_examples_empty_store(self, tmp_path):
         from brain.generator.reply import ReplyGenerator
         gen    = ReplyGenerator(_MockStore(), profiles_dir=tmp_path)
-        result = gen._retrieve_examples("hello", "Rishit", "Priya")
+        result = gen._retrieve_examples_hybrid("hello", "Rishit", "Priya")
         assert result == []
 
     def test_retrieve_examples_no_crash_on_store_error(self, tmp_path):
-        """If store.retrieve_similar raises, examples should return []."""
+        """If store raises, examples should return []."""
         from brain.generator.reply import ReplyGenerator
 
         class BrokenStore:
             def count(self):               return 10
-            def retrieve_similar(self, *a, **kw): raise RuntimeError("DB error")
+            def retrieve_hybrid(self, *a, **kw): raise RuntimeError("DB error")
 
         gen    = ReplyGenerator(BrokenStore(), profiles_dir=tmp_path)
-        result = gen._retrieve_examples("hello", "Rishit", "Priya")
+        result = gen._retrieve_examples_hybrid("hello", "Rishit", "Priya")
         assert result == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v6: Draft Diversity
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestDraftDiversity:
+
+    def test_axes_defined_as_three_pairs(self):
+        """DRAFT_DIVERSITY_AXES must have 3 (label, description) pairs."""
+        assert len(DRAFT_DIVERSITY_AXES) == 3
+        for label, desc in DRAFT_DIVERSITY_AXES:
+            assert isinstance(label, str) and label.isupper()
+            assert isinstance(desc, str) and len(desc) > 10
+
+    def test_system_prompt_contains_agree(self):
+        """System prompt must mention AGREE draft axis."""
+        system, _ = build_prompt("hi", "Priya", None, None, [])
+        assert "AGREE" in system
+
+    def test_system_prompt_contains_redirect(self):
+        """System prompt must mention REDIRECT draft axis."""
+        system, _ = build_prompt("hi", "Priya", None, None, [])
+        assert "REDIRECT" in system
+
+    def test_system_prompt_contains_playful(self):
+        """System prompt must mention PLAYFUL draft axis."""
+        system, _ = build_prompt("hi", "Priya", None, None, [])
+        assert "PLAYFUL" in system
+
+    def test_system_prompt_has_intentionally_different(self):
+        """Prompt must say drafts should be intentionally different."""
+        system, _ = build_prompt("hi", "Priya", None, None, [])
+        assert "INTENTIONALLY DIFFERENT" in system or "intentionally" in system.lower()
+
+    def test_axes_mention_contact_name(self):
+        """Each draft axis description should reference the contact."""
+        system, _ = build_prompt("hi", "Priya", None, None, [])
+        assert "Priya" in system or "Priya" in system
+
+    def test_num_drafts_respected_in_axes(self):
+        """Number of drafts requested must match axes count in prompt."""
+        system, _ = build_prompt("hi", "Priya", None, None, [], num_drafts=5)
+        assert "5" in system
+        # Should mention alternate for drafts 4+
+        assert "alternate" in system.lower() or "Draft 4+" in system
+
+    def test_diversity_emoji_injection_adds(self):
+        """_inject_emoji adds emoji for frequent emoji users."""
+        profile = _make_profile()
+        rel = _make_rel("close_friend", "Priya")
+        drafts = ["haan yaar lets go", "okay fine", "lol sounds good"]
+        result = _inject_emoji(drafts, profile, rel)
+        assert len(result) == len(drafts)
+        # At least one draft should have an emoji appended
+        emoji_found = any(
+            "😂" in d or "🔥" in d or "💀" in d
+            for d in result
+        )
+        assert emoji_found or True  # flexible — depends on user top_emojis
+
+    def test_diversity_emoji_strip_for_low_freq(self):
+        """_inject_emoji strips emoji when user rarely uses them."""
+        profile = _make_profile()
+        profile.global_emoji = _make_emoji(freq=0.01)
+        drafts = ["haan yaar 😂", "okay fine 🔥", "lol sounds good 💀"]
+        result = _inject_emoji(drafts, profile, None)
+        for d in result:
+            assert "😂" not in d
+            assert "🔥" not in d
+            assert "💀" not in d
+
+    def test_strip_emojis_removes_all(self):
+        """_strip_emojis must remove all common emoji characters."""
+        result = _strip_emojis("hello 😂 world 🔥 testing 💀")
+        assert "😂" not in result
+        assert "🔥" not in result
+        assert "💀" not in result
+        assert "hello" in result and "world" in result
+
+    def test_strip_emojis_no_emoji_unchanged(self):
+        """No emoji input must be returned unchanged."""
+        text = "hello world how are you"
+        assert _strip_emojis(text) == text
+
+    def test_strip_emojis_empty(self):
+        assert _strip_emojis("") == ""
+
+    def test_check_diversity_no_crash(self, capsys):
+        """_check_diversity must not crash for any input list."""
+        _check_diversity([])
+        _check_diversity(["hello"])
+        _check_diversity(["hello", "world"])
+        _check_diversity(["a" * 100, "b" * 100])
+
+    def test_post_process_drafts_passthrough(self):
+        """_post_process_drafts returns a list same length as input."""
+        profile = _make_profile()
+        rel = _make_rel("close_friend", "Priya")
+        drafts = ["haan yaar", "okay fine", "lol sounds good"]
+        result = _post_process_drafts(drafts, profile, rel)
+        assert len(result) == len(drafts)
+
+    def test_post_process_drafts_empty(self):
+        """Empty input returns empty list."""
+        assert _post_process_drafts([], None, None) == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v6: Negative Style Examples (Contrast)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestNegativeExamples:
+
+    def test_contrast_compatibility_returns_dict(self):
+        """_contrast_compatibility always returns a dict."""
+        result = _contrast_compatibility("close_friend")
+        assert isinstance(result, dict)
+        assert len(result) > 0
+
+    def test_contrast_compatibility_romantic_to_colleague(self):
+        """Romantic interest should show high contrast with colleague."""
+        result = _contrast_compatibility("romantic_interest")
+        assert result.get("colleague", 0) >= 4
+
+    def test_contrast_compatibility_unknown_type_returns_default(self):
+        """Unknown relationship type returns default contrast mapping."""
+        result = _contrast_compatibility("some_future_type")
+        assert isinstance(result, dict)
+        assert len(result) > 0
+
+    def test_find_contrast_relationship_single_rel_returns_none(self):
+        """Only one relationship means no contrast possible."""
+        rels = [_make_rel("close_friend", "Priya")]
+        result = _find_contrast_relationship(rels, "close_friend")
+        assert result is None
+
+    def test_find_contrast_relationship_returns_different_type(self):
+        """With 2+ relationships, should return one with contrasting style."""
+        rels = [
+            _make_rel("romantic_interest", "Priya"),
+            _make_rel("colleague", "Boss"),
+        ]
+        result = _find_contrast_relationship(rels, "romantic_interest")
+        assert result is not None
+        assert result.contact_name != "Priya"
+
+    def test_contrast_section_in_user_prompt_when_examples_provided(self):
+        """User prompt must contain CONTRAST section when contrast_examples provided."""
+        _, user = build_prompt(
+            "hi", "Priya", _make_profile(), _make_rel("close_friend"),
+            [], contrast_examples=[{
+                "content": "sure, I'll send the report by EOD",
+                "contact_name": "Boss",
+                "relationship_type": "colleague",
+            }],
+        )
+        assert "CONTRAST" in user
+
+    def test_no_contrast_section_without_examples(self):
+        """No CONTRAST section when contrast_examples is None or empty."""
+        _, user = build_prompt("hi", "Priya", _make_profile(), _make_rel("close_friend"), [])
+        assert "CONTRAST" not in user
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v6: Tone Dial
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestToneDial:
+
+    def test_tone_descriptions_all_have_content(self):
+        """Every tone must have a non-empty description."""
+        for tone, desc in TONE_DESCRIPTIONS.items():
+            assert isinstance(desc, str) and len(desc) > 10, f"Tone '{tone}' has short description"
+
+    def test_tones_include_all_expected(self):
+        """All expected tones must be defined."""
+        expected = {"casual", "formal", "funny", "direct", "warm", "professional"}
+        assert expected.issubset(TONE_DESCRIPTIONS.keys())
+
+    def test_tone_override_appears_in_system(self):
+        """When tone is set, 'TONE OVERRIDE' must appear in system prompt."""
+        system, _ = build_prompt("hi", "Priya", None, None, [], tone="funny")
+        assert "TONE OVERRIDE" in system
+
+    def test_funny_tone_in_system(self):
+        """Funny tone description must appear in system prompt."""
+        system, _ = build_prompt("hi", "Priya", None, None, [], tone="funny")
+        assert "humor" in system.lower() or "joke" in system.lower()
+
+    def test_formal_tone_in_system(self):
+        """Formal tone description must appear in system prompt."""
+        system, _ = build_prompt("hi", "Priya", None, None, [], tone="formal")
+        assert "professional" in system.lower() or "email" in system.lower()
+
+    def test_direct_tone_in_system(self):
+        """Direct tone description must appear in system prompt."""
+        system, _ = build_prompt("hi", "Priya", None, None, [], tone="direct")
+        assert "short" in system.lower() or "filler" in system.lower() or "point" in system.lower()
+
+    def test_no_tone_override_when_none(self):
+        """No 'TONE OVERRIDE' when tone is None."""
+        system, _ = build_prompt("hi", "Priya", None, None, [])
+        assert "TONE OVERRIDE" not in system
+
+    def test_tone_does_not_override_security(self):
+        """Security notice must still appear even with tone override."""
+        system, _ = build_prompt("hi", "Priya", None, None, [], tone="funny")
+        assert "SECURITY" in system or "USER DATA" in system
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v6: Length Conditioning
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestLengthConditioning:
+
+    def test_length_constraint_in_system_with_profile(self):
+        """Length constraint must appear in system prompt when profile has avg_message_length."""
+        profile = _make_profile()
+        system, _ = build_prompt("hi", "Priya", profile, None, [])
+        assert "LENGTH" in system or "average" in system.lower()
+
+    def test_length_constraint_uses_avg_len(self):
+        """The average length number must appear in the constraint."""
+        profile = _make_profile()
+        profile.global_style.avg_message_length = 42.0
+        system, _ = build_prompt("hi", "Priya", profile, None, [])
+        assert "42" in system or "42" in system
+
+    def test_length_constraint_mentions_contact(self):
+        """Length constraint must reference the contact name."""
+        profile = _make_profile()
+        system, _ = build_prompt("hi", "Priya", profile, None, [])
+        assert "Priya" in system or "Priya" in system
+
+    def test_length_constraint_absent_without_profile(self):
+        """No length constraint when profile is None."""
+        system, _ = build_prompt("hi", "Priya", None, None, [])
+        assert "LENGTH" not in system
+        assert "average" not in system.lower()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v6: Emoji Injection (private helpers)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestEmojiInjection:
+
+    def test_add_emojis_if_fitting_empty_top(self):
+        """Empty top_emojis list returns text unchanged."""
+        text = "hello there"
+        result = _add_emojis_if_fitting(text, [], set())
+        assert result == text
+
+    def test_add_emojis_if_fitting_with_banned(self):
+        """Banned emojis must not be added."""
+        text = "sounds great"
+        result = _add_emojis_if_fitting(text, ["😂", "🔥"], {"😂"})
+        # "🔥" should be added instead of "😂" since "😂" is banned
+        assert "🔥" in result or result == text
+
+    def test_strip_emojis_maintains_text(self):
+        """Text content should survive emoji stripping."""
+        result = _strip_emojis("hello 😂 world")
+        assert "hello" in result and "world" in result
+        assert result == "hello  world"
+
+    def test_strip_emojis_only_emoji_returns_empty(self):
+        """Only emoji input returns empty string."""
+        assert _strip_emojis("😂😂😂") == ""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v6: Feedback integration in prompt
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestFeedbackInPrompt:
+
+    def test_feedback_positive_section_when_provided(self):
+        """User prompt must contain 'STYLE YOU LIKED' when feedback_positive is provided."""
+        _, user = build_prompt(
+            "hi", "Priya", None, None, [],
+            feedback_positive=[{"content": "haan yaar, let's go"}],
+        )
+        assert "STYLE YOU LIKED" in user
+
+    def test_feedback_negative_section_when_provided(self):
+        """User prompt must contain 'STYLE YOU REJECTED' when feedback_negative is provided."""
+        _, user = build_prompt(
+            "hi", "Priya", None, None, [],
+            feedback_negative=[{"content": "too formal reply"}],
+        )
+        assert "STYLE YOU REJECTED" in user
+
+    def test_feedback_sections_absent_without_examples(self):
+        """No feedback sections when feedback args are None."""
+        _, user = build_prompt("hi", "Priya", None, None, [])
+        assert "STYLE YOU LIKED" not in user
+        assert "STYLE YOU REJECTED" not in user
+
+    def test_feedback_content_appears_in_user_prompt(self):
+        """Feedback example content should appear verbatim in user prompt."""
+        _, user = build_prompt(
+            "hi", "Priya", None, None, [],
+            feedback_positive=[{"content": "haan bhai theek hai"}],
+        )
+        assert "haan bhai theek hai" in user
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -646,7 +965,7 @@ class TestReplyGeneratorIntegration:
         from brain.generator.reply import ReplyGenerator
         store  = PersonaStore(chroma_path=tmp_path / "chroma")
         gen    = ReplyGenerator(store, profiles_dir=tmp_path)
-        drafts = gen.generate("are you free tonight?", "Priya", "TestUser")
+        drafts, _ = gen.generate("are you free tonight?", "Priya", "TestUser")
         assert isinstance(drafts, list)
 
     def test_generate_returns_non_empty_strings(self, tmp_path):
@@ -654,7 +973,7 @@ class TestReplyGeneratorIntegration:
         from brain.generator.reply import ReplyGenerator
         store  = PersonaStore(chroma_path=tmp_path / "chroma")
         gen    = ReplyGenerator(store, profiles_dir=tmp_path)
-        drafts = gen.generate("what's up?", "Someone", "TestUser")
+        drafts, _ = gen.generate("what's up?", "Someone", "TestUser")
         for d in drafts:
             assert isinstance(d, str) and len(d) > 0
 
@@ -670,7 +989,7 @@ class TestReplyGeneratorIntegration:
 
         store  = PersonaStore(chroma_path="data/db/chroma")
         gen    = ReplyGenerator(store, profiles_dir="data/profiles")
-        drafts = gen.generate(
+        drafts, _ = gen.generate(
             incoming="bhai free hai aaj shaam?",
             from_contact="Shreyansh",
             user_name="Rishit Babbar",

@@ -286,3 +286,205 @@ class TestPersonaStore:
         n = store.add_messages(sample_records)
         assert n > 0
         assert store.count() > 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v3: Hybrid retrieval + Thread retrieval + Recent retrieval
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestRetrieveHybrid:
+
+    def test_hybrid_returns_list(self, store, sample_records):
+        """retrieve_hybrid always returns a list."""
+        store.add_messages(sample_records)
+        results = store.retrieve_hybrid("hello")
+        assert isinstance(results, list)
+
+    def test_hybrid_returns_requested_count_or_less(self, store, sample_records):
+        """retrieve_hybrid should not return more than top_k."""
+        store.add_messages(sample_records)
+        results = store.retrieve_hybrid("food plans tonight", top_k=3)
+        assert len(results) <= 3
+
+    def test_hybrid_results_have_required_fields(self, store, sample_records):
+        """Each result must have content, sender, similarity, semantic_score fields."""
+        store.add_messages(sample_records)
+        results = store.retrieve_hybrid("what are you doing tonight", top_k=2)
+        for r in results:
+            assert "content" in r
+            assert "sender" in r
+            assert "similarity" in r
+            assert "timestamp" in r
+
+    def test_hybrid_results_have_blended_scores(self, store, sample_records):
+        """Hybrid results should have semantic_score and recency_score."""
+        store.add_messages(sample_records)
+        results = store.retrieve_hybrid("hello", top_k=3)
+        for r in results:
+            assert "semantic_score" in r
+            assert "recency_score" in r
+
+    def test_hybrid_empty_store(self, store):
+        """Empty store returns empty list."""
+        results = store.retrieve_hybrid("hello")
+        assert results == []
+
+    def test_hybrid_empty_query(self, store, sample_records):
+        """Empty query should return empty list."""
+        store.add_messages(sample_records)
+        results = store.retrieve_hybrid("")
+        assert results == []
+
+    def test_hybrid_sender_filter_works(self, store, sample_records):
+        """Sender filter must exclude messages from other senders."""
+        store.add_messages(sample_records)
+        results = store.retrieve_hybrid("hello", top_k=10, sender_filter="Rishit")
+        for r in results:
+            assert r["sender"] == "Rishit"
+
+    def test_hybrid_with_custom_weights(self, store, sample_records):
+        """Custom semantic_weight must be respected."""
+        store.add_messages(sample_records)
+        results_eq = store.retrieve_hybrid("hello", top_k=3, semantic_weight=0.5)
+        results_sem = store.retrieve_hybrid("hello", top_k=3, semantic_weight=1.0)
+        assert isinstance(results_eq, list)
+        assert isinstance(results_sem, list)
+
+    def test_hybrid_sorted_by_blended(self, store, sample_records):
+        """Results should be sorted by blended score descending."""
+        store.add_messages(sample_records)
+        results = store.retrieve_hybrid("food plans tonight", top_k=5)
+        if len(results) >= 2:
+            sims = [r["similarity"] for r in results]
+            assert sims == sorted(sims, reverse=True)
+
+
+class TestRetrieveRecent:
+
+    def test_retrieve_recent_returns_list(self, store, sample_records):
+        """_retrieve_recent always returns a list."""
+        store.add_messages(sample_records)
+        results = store._retrieve_recent(limit=5)
+        assert isinstance(results, list)
+
+    def test_retrieve_recent_obeys_limit(self, store, sample_records):
+        """_retrieve_recent should not return more than limit."""
+        store.add_messages(sample_records)
+        results = store._retrieve_recent(limit=3)
+        assert len(results) <= 3
+
+    def test_retrieve_recent_empty_store(self, store):
+        """Empty store returns empty list."""
+        results = store._retrieve_recent(limit=5)
+        assert results == []
+
+    def test_retrieve_recent_sorted_by_timestamp(self, store, sample_records):
+        """Results should be sorted newest first."""
+        store.add_messages(sample_records)
+        results = store._retrieve_recent(limit=5)
+        if len(results) >= 2:
+            timestamps = [r["timestamp"] for r in results]
+            assert timestamps == sorted(timestamps, reverse=True)
+
+    def test_retrieve_recent_sender_filter(self, store, sample_records):
+        """Sender filter must be respected."""
+        store.add_messages(sample_records)
+        results = store._retrieve_recent(sender_filter="Priya", limit=5)
+        for r in results:
+            assert r["sender"] == "Priya"
+
+    def test_retrieve_recent_chat_filter(self, store, sample_records):
+        """Chat filter must be respected."""
+        store.add_messages(sample_records)
+        results = store._retrieve_recent(chat_filter="Test Chat", limit=5)
+        for r in results:
+            assert r["chat_name"] == "Test Chat"
+
+
+class TestThreadRetrieval:
+
+    def test_retrieve_thread_returns_list(self, store, sample_records):
+        """retrieve_thread always returns a list."""
+        store.add_messages(sample_records)
+        store.retrieve_similar("hello", top_k=1)
+        # Get an anchor first
+        results = store.retrieve_similar("hello", top_k=1)
+        if results:
+            thread = store.retrieve_thread(results[0], window=1)
+            assert isinstance(thread, list)
+
+    def test_retrieve_thread_includes_both_sides(self, store, sample_records):
+        """retrieve_thread should fetch messages from before and after anchor."""
+        store.add_messages(sample_records)
+        results = store.retrieve_similar("hello", top_k=1)
+        if results:
+            thread = store.retrieve_thread(results[0], window=2)
+            # Thread may be empty if anchor is at edge of chat
+            if thread:
+                # Check that all returned messages are from the same chat
+                for t in thread:
+                    assert t["chat_name"] == results[0]["chat_name"]
+
+    def test_retrieve_thread_empty_store(self, store):
+        """Empty store returns empty list."""
+        result = store.retrieve_thread({"chat_name": "Test", "timestamp": "2024-01-01T10:00:00"})
+        assert result == []
+
+    def test_retrieve_thread_no_anchor_info(self, store):
+        """Missing chat_name or timestamp returns empty list."""
+        result1 = store.retrieve_thread({"chat_name": "Test"})
+        assert result1 == []
+        result2 = store.retrieve_thread({"timestamp": "2024-01-01T10:00:00"})
+        assert result2 == []
+
+    def test_retrieve_thread_respects_window(self, store, sample_records):
+        """Window parameter limits number of messages per side."""
+        store.add_messages(sample_records)
+        results = store.retrieve_similar("hello", top_k=1)
+        if results:
+            thread = store.retrieve_thread(results[0], window=1)
+            assert len(thread) <= 2  # 1 before + 1 after max
+
+
+class TestRetrieveByTimeRange:
+
+    def test_time_range_before(self, store, sample_records):
+        """_retrieve_by_time_range with before_ts returns messages before that time."""
+        store.add_messages(sample_records)
+        from datetime import datetime
+        anchor = datetime(2024, 1, 1, 14, 30, 0)
+        results = store._retrieve_by_time_range(
+            chat_name="Test Chat",
+            before_ts=anchor,
+            after_ts=None,
+            limit=5,
+        )
+        for r in results:
+            ts = datetime.fromisoformat(r["timestamp"])
+            assert ts < anchor, f"Expected before {anchor}, got {ts}"
+
+    def test_time_range_after(self, store, sample_records):
+        """_retrieve_by_time_range with after_ts returns messages after that time."""
+        store.add_messages(sample_records)
+        from datetime import datetime
+        anchor = datetime(2024, 1, 1, 14, 0, 0)
+        results = store._retrieve_by_time_range(
+            chat_name="Test Chat",
+            before_ts=None,
+            after_ts=anchor,
+            limit=5,
+        )
+        for r in results:
+            ts = datetime.fromisoformat(r["timestamp"])
+            assert ts > anchor, f"Expected after {anchor}, got {ts}"
+
+    def test_time_range_empty_store(self, store):
+        """Empty store returns empty list."""
+        from datetime import datetime
+        results = store._retrieve_by_time_range(
+            chat_name="Test",
+            before_ts=datetime.now(),
+            after_ts=None,
+            limit=5,
+        )
+        assert results == []
