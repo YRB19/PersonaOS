@@ -12,6 +12,8 @@ All commands are invoked as:
 python -m cli.main <command> [options]
 ```
 
+Available commands: `setup`, `profile`, `parse`, `signals`, `summary`, `store`, `search`, `reply`, `suggest`, `feedback`, `serve`, `check`
+
 ---
 
 ## setup
@@ -287,6 +289,10 @@ ollama serve
 | `--model`, `-m` | `qwen3.5:9b` | Ollama model to use |
 | `--db` | `data/db/chroma` | ChromaDB storage path |
 | `--dir`, `-d` | `data/profiles` | Profiles directory |
+| `--tone`, `-t` | *(none)* | Tone override: `casual`, `formal`, `funny`, `direct`, `warm`, `professional` |
+| `--pick`, `-p` | *(none)* | Draft number you chose (1-indexed). Records feedback. |
+| `--reject`, `-r` | *(none)* | Comma-separated rejected draft numbers. Use with `--pick`. |
+| `--explain`, `-e` | `False` | Print which RAG examples influenced each draft |
 
 ### Examples
 
@@ -299,8 +305,121 @@ python -m cli.main reply "bhai notes bhej de" --you "Rishit Babbar" --contact "S
 ```
 
 ```bash
-python -m cli.main reply "what's the plan?" --you "Rishit Babbar" --contact "Vibhu" --model mistral
+python -m cli.main reply "are you free?" --you "Rishit Babbar" --contact "Priya" --tone funny
 ```
+
+```bash
+python -m cli.main reply "notes bhej de" --you "Rishit Babbar" --contact "Shreyansh" --pick 2 --reject 1,3
+```
+
+```bash
+python -m cli.main reply "what's the plan?" --you "Rishit Babbar" --contact "Vibhu" --explain
+```
+
+---
+
+## suggest
+
+**Description:** Suggest reaction emojis and GIFs for an incoming message.
+
+Emoji suggestions are fully local (no API required). GIF suggestions require a `TENOR_API_KEY` in `.env` (free, ~2 min setup at [Tenor](https://developers.google.com/tenor/guides/quickstart)).
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `INCOMING` | The incoming message to get suggestions for |
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--you`, `-u` | *(required)* | Your name (matches profile) |
+| `--contact`, `-c` | *(required)* | Who sent the message |
+| `--type`, `-t` | `all` | What to suggest: `emoji`, `gif`, or `all` |
+| `--dir`, `-d` | `data/profiles` | Profiles directory |
+
+### Examples
+
+```bash
+python -m cli.main suggest "lmao bhai 💀" --you "Rishit Babbar" --contact "Shreyansh"
+```
+
+Emoji only (no Tenor key needed):
+
+```bash
+python -m cli.main suggest "you free tonight?" --you "Rishit Babbar" --contact "Priya" --type emoji
+```
+
+GIF only (requires `TENOR_API_KEY`):
+
+```bash
+python -m cli.main suggest "got the placement!!" --you "Rishit Babbar" --contact "Dhaval Sethi" --type gif
+```
+
+---
+
+## feedback
+
+**Description:** Show feedback stats for a user — acceptance rate, rejected replies, and recent entries.
+
+### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `YOU` | Name used when running `setup` / `store` |
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--recent`, `-r` | `False` | Show last 10 feedback entries with details |
+| `--dir`, `-d` | `data/profiles` | Profiles directory |
+
+### Examples
+
+```bash
+python -m cli.main feedback "Rishit Babbar"
+```
+
+```bash
+python -m cli.main feedback "Rishit Babbar" --recent
+```
+
+---
+
+## serve
+
+**Description:** Start the PersonaOS Brain API server (Phase 3.5). Provides a REST interface to the reply generator and memory store.
+
+### Prerequisite
+
+```bash
+pip install uvicorn
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--host`, `-H` | `127.0.0.1` | Bind address |
+| `--port`, `-p` | `8765` | Port number |
+| `--reload`, `-r` | `False` | Auto-reload on file changes (dev mode) |
+| `--db` | `data/db/chroma` | ChromaDB path |
+| `--dir`, `-d` | `data/profiles` | Profiles directory |
+| `--model`, `-m` | `qwen3.5:9b` | Ollama model |
+
+### Examples
+
+```bash
+python -m cli.main serve
+```
+
+```bash
+python -m cli.main serve --port 9000 --reload
+```
+
+API docs available at `http://127.0.0.1:8765/docs` once running.
 
 ---
 
@@ -440,20 +559,32 @@ python scripts/setup_check.py
 | `store` | `PATHS...` | Embed messages into vector database |
 | `search` | `QUERY` | Semantic memory search |
 | `reply` | `INCOMING` | Generate personalized reply drafts |
+| `suggest` | `INCOMING` | Suggest emoji reactions and GIFs |
+| `feedback` | `YOU` | View feedback stats (acceptance rate, recent entries) |
+| `serve` | *(none)* | Start the Brain API server |
 | `check` | *(none)* | Validate environment |
 
 ## Common Options Reference
 
 | Flag | Used by | Default | Description |
 |------|---------|---------|-------------|
-| `--you`, `-u` | setup, parse, signals, store, search, reply | *(varies)* | Your sender name |
+| `--you`, `-u` | setup, parse, signals, store, search, reply, suggest | *(varies)* | Your sender name |
 | `--out`, `-o` | setup | `data/profiles` | Output directory for profiles |
-| `--dir`, `-d` | profile, summary, reply | `data/profiles` | Profiles directory |
-| `--model`, `-m` | summary, reply | `qwen3.5:9b` | Ollama model |
-| `--db` | store, search, reply | `data/db/chroma` | ChromaDB path |
-| `--contact`, `-c` | signals, search, reply | `""` | Filter by contact |
-| `--chat`, `-c` | parse | `""` | Chat name override |
-| `--num`, `-n` | reply | `3` / `5` | Number of results/drafts |
+| `--dir`, `-d` | profile, summary, reply, suggest, feedback, serve | `data/profiles` | Profiles directory |
+| `--model`, `-m` | summary, reply, serve | `qwen3.5:9b` | Ollama model |
+| `--db` | store, search, reply, serve | `data/db/chroma` | ChromaDB path |
+| `--contact`, `-c` | signals, search, reply, suggest | `""` | Filter by contact |
+| `--chat`, `-c` | parse, search | `""` | Chat name override / filter |
+| `--num`, `-n` | reply | `3` | Number of drafts to generate |
 | `--top`, `-n` | search | `5` | Number of search results |
+| `--type`, `-t` | suggest | `all` | Suggestion type: `emoji`, `gif`, or `all` |
+| `--recent`, `-r` | feedback | `False` | Show last 10 feedback entries |
 | `--clear` | store | `False` | Clear existing index first |
+| `--host`, `-H` | serve | `127.0.0.1` | API server bind address |
+| `--port`, `-p` | serve | `8765` | API server port |
+| `--reload`, `-r` | serve | `False` | Auto-reload on file changes (dev) |
+| `--tone`, `-t` | reply | *(none)* | Tone override: casual, formal, funny, direct, warm, professional |
+| `--pick`, `-p` | reply | *(none)* | Draft number chosen (1-indexed); records feedback |
+| `--reject`, `-r` | reply | *(none)* | Comma-separated rejected draft numbers |
+| `--explain`, `-e` | reply | `False` | Show which RAG examples influenced each draft |
 
