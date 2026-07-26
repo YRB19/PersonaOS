@@ -87,29 +87,25 @@ python -m cli.main profile "Rishit Babbar" --dir custom/profiles
 
 ## parse
 
-**Description:** Parse chat exports and display raw statistics (message counts, date range, sender breakdown). Does **not** save a profile — use `setup` for that.
+**Description:** Parse a single chat export and display raw statistics (message counts, date range, sender breakdown). Does **not** save a profile — use `setup` for that.
 
 ### Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `PATHS...` | One or more export files, OR a directory containing exports |
+| `FILE` | Path to a WhatsApp `.txt` or Telegram `.json` export (single file) |
 
 ### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--you`, `-u` | `""` | Highlight your messages in the breakdown |
-| `--chat`, `-c` | `""` | Chat name override (only applies when a single file is provided) |
+| `--chat`, `-c` | `""` | Chat name override |
 
 ### Examples
 
 ```bash
 python -m cli.main parse data/exports/chat.txt --you "Rishit Babbar"
-```
-
-```bash
-python -m cli.main parse data/exports/ --you "Rishit Babbar"
 ```
 
 ```bash
@@ -553,7 +549,7 @@ python scripts/setup_check.py
 |---------|-----------|---------|
 | `setup` | `PATHS...` | Build communication profile from exports |
 | `profile` | `YOU` | View saved profile |
-| `parse` | `PATHS...` | Parse exports without saving a profile |
+| `parse` | `FILE` | Parse a single export without saving a profile |
 | `signals` | `FILE` | View relationship signal breakdown |
 | `summary` | `YOU` | Generate AI-powered profile summary |
 | `store` | `PATHS...` | Embed messages into vector database |
