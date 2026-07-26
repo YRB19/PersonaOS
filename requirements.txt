@@ -20,10 +20,10 @@ emoji                    # Emoji detection and analysis
 requests                 # HTTP client for Giphy API
 
 # ── Phase 3.5 — Brain API Server ──────────────────────────────────────────────
-fastapi                  # API framework
+fastapi>=0.110,<=0.115     # API framework
 uvicorn[standard]        # ASGI server (run: python -m cli.main serve)
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest
 pytest-cov
-httpx                    # Required by FastAPI TestClient
+httpx<0.28                # Required by FastAPI TestClient (Starlette 0.36 not compat with httpx>=0.28)

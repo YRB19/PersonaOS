@@ -451,10 +451,12 @@ class PersonaStore:
         """
         Fetch messages from a specific chat within a time window.
 
-        ChromaDB metadata filtering on chat_name + timestamp range.
-        Timestamps are stored as ISO-format strings; ChromaDB supports
-        $gte / $lte on string fields for lexicographic comparison, which
-        works correctly for ISO 8601 timestamps.
+        ChromaDB $lt/$gt operators only accept int/float values, not strings.
+        Since timestamps are stored as ISO-format strings, time-range
+        filtering is done in Python after fetching all messages from the
+        target chat. The chat-scoped fetch is bounded by the collection
+        size for that chat (typically hundreds to thousands of messages,
+        not millions).
 
         Args:
             chat_name: Required — which chat to query
@@ -469,19 +471,7 @@ class PersonaStore:
         if self.collection.count() == 0:
             return []
 
-        chat_condition = {"chat_name": {"$eq": _bound_filter(chat_name)}}
-        conditions = [chat_condition]
-
-        if before_ts is not None:
-            conditions.append(
-                {"timestamp": {"$lt": before_ts.isoformat()}}
-            )
-        if after_ts is not None:
-            conditions.append(
-                {"timestamp": {"$gt": after_ts.isoformat()}}
-            )
-
-        where = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+        where = _build_chat_name_or(_normalise_chat_name(chat_name))
 
         try:
             result = self.collection.get(
@@ -497,14 +487,23 @@ class PersonaStore:
         docs  = result["documents"]
         metas = result["metadatas"]
 
-        paired = list(zip(docs, metas))
+        # Python-side time-range filtering
+        filtered: list[tuple[str, dict]] = []
+        for doc, meta in zip(docs, metas):
+            try:
+                ts = datetime.fromisoformat(meta.get("timestamp", ""))
+            except (ValueError, TypeError):
+                continue
+            if before_ts is not None and ts >= before_ts:
+                continue
+            if after_ts is not None and ts <= after_ts:
+                continue
+            filtered.append((doc, meta))
 
         if before_ts is not None:
-            # Want messages closest to anchor (newest first → reverse later)
-            paired.sort(key=lambda p: p[1].get("timestamp", ""), reverse=True)
+            filtered.sort(key=lambda p: p[1].get("timestamp", ""), reverse=True)
         else:
-            # Want messages closest to anchor (oldest first)
-            paired.sort(key=lambda p: p[1].get("timestamp", ""))
+            filtered.sort(key=lambda p: p[1].get("timestamp", ""))
 
         return [
             {
@@ -516,7 +515,7 @@ class PersonaStore:
                 "distance":   0.0,
                 "similarity": 0.0,
             }
-            for doc, meta in paired[:limit]
+            for doc, meta in filtered[:limit]
         ]
 
     # ── Language-aware retrieval (from fork: Feature 6) ─────────────────────────
@@ -620,10 +619,16 @@ def _make_metadata(record: MessageRecord) -> dict:
     """
     Flatten a MessageRecord into ChromaDB metadata.
     ChromaDB metadata values must be str, int, float, or bool.
+
+    chat_name is normalised at write time so legacy prefixes (e.g.
+    'WhatsApp Chat with Vibhu Kakkar') never reach ChromaDB metadata.
+    This guarantees query-time filters built from canonical names will
+    always match — no silent zero-results regression even for pre-clear
+    data that the parser may have left with the full filename prefix.
     """
     return {
         "sender":     record.sender,
-        "chat_name":  record.chat_name,
+        "chat_name":  _normalise_chat_name(record.chat_name),
         "timestamp":  record.timestamp.isoformat(),
         "platform":   record.platform,
         "has_emoji":  record.has_emoji,
@@ -647,18 +652,52 @@ def _build_where(
     Defense-in-depth: filter strings are capped at MAX_FILTER_CHARS so a
     pathological input cannot degrade query behaviour or push the model
     off-task.
+
+    chat_filter uses an $or clause that matches against both the canonical
+    stripped name AND the legacy prefixed form (e.g. 'WhatsApp Chat with
+    Vibhu Kakkar'). This guarantees queries work regardless of whether the
+    stored metadata was written before or after the write-time prefix-strip
+    fix landed. Once all data has been rebuilt with --clear the prefixed
+    branch becomes effectively dead but costs nothing at query time.
     """
     conditions: list[dict] = []
     if sender_filter:
         conditions.append({"sender": {"$eq": _bound_filter(sender_filter)}})
     if chat_filter:
-        conditions.append({"chat_name": {"$eq": _bound_filter(chat_filter)}})
+        normalised = _normalise_chat_name(chat_filter)
+        conditions.append(_build_chat_name_or(normalised))
 
     if not conditions:
         return None
     if len(conditions) == 1:
         return conditions[0]
     return {"$and": conditions}
+
+
+def _build_chat_name_or(canonical: str) -> dict:
+    """
+    Build a ChromaDB $or filter that matches chat_name against both the
+    canonical stripped form AND every legacy prefixed variant.
+
+    Example for canonical='Vibhu Kakkar':
+        {"$or": [
+            {"chat_name": {"$eq": "Vibhu Kakkar"}},
+            {"chat_name": {"$eq": "WhatsApp Chat with Vibhu Kakkar"}},
+        ]}
+
+    ChromaDB evaluates $or as a logical disjunction — satisfies if ANY
+    branch matches. This is the key fix for Bug 2 (silent zero-results).
+    """
+    canonical_val = _bound_filter(canonical)
+    branches: list[dict] = [{"chat_name": {"$eq": canonical_val}}]
+
+    for prefix in _WHATSAPP_LEGACY_PREFIXES:
+        prefixed = f"{prefix}{canonical}"
+        branches.append({"chat_name": {"$eq": _bound_filter(prefixed)}})
+
+    if len(branches) == 1:
+        return branches[0]
+    return {"$or": branches}
 
 
 MAX_FILTER_CHARS = 256
@@ -668,3 +707,31 @@ def _bound_filter(value: str) -> str:
     if not isinstance(value, str):
         value = str(value)
     return value[:MAX_FILTER_CHARS]
+
+
+# Legacy prefixes the WhatsApp parser used to leave in chat_name metadata
+# before the 2026-06-25 fix. Stripped symmetrically on every query so the
+# store never silently returns zero results for the same contact.
+_WHATSAPP_LEGACY_PREFIXES = (
+    "WhatsApp Chat with ",
+)
+
+
+def _normalise_chat_name(name: str) -> str:
+    """
+    Canonicalise a chat/contact name for ChromaDB equality filtering.
+
+    Strips known legacy prefixes (e.g. 'WhatsApp Chat with ') and trims
+    surrounding whitespace. Stored metadata is NOT modified — this only
+    normalises the query side. After a --clear rebuild all metadata is
+    already in canonical form, so this function effectively passes inputs
+    through unchanged; it exists purely as a safety net.
+    """
+    if not isinstance(name, str):
+        name = str(name) if name is not None else ""
+    name = name.strip()
+    for prefix in _WHATSAPP_LEGACY_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return name.strip()

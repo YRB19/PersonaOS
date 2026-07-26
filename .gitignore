@@ -12,7 +12,8 @@ build/
 data/exports/
 data/profiles/
 data/db/
-custom/profiles/*.json
+custom/profiles/
+bugs.md
 
 # Environment
 .env
@@ -40,3 +41,4 @@ generate_commands.py
 #self-files
 PersonaOS_ProjectPlan.md
 PersonaOS_Setup.md
+opencode.json

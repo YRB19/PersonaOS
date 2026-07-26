@@ -121,7 +121,52 @@ class TestWhatsAppParser:
         result = self.try_parse_line("this is a continuation line")
         assert result is None
 
-    def test_huge_continuation_is_bounded(self, tmp_path):
+    def test_chat_name_from_filename_with_prefix(self, tmp_path):
+        """Filename with 'WhatsApp Chat with ' prefix must be stripped."""
+        src = FIXTURES_DIR / "sample_whatsapp.txt"
+        content = src.read_text(encoding="utf-8")
+        dest = tmp_path / "WhatsApp Chat with Vibhu Kakkar.txt"
+        dest.write_text(content, encoding="utf-8")
+        records = self.parse(dest)
+        assert len(records) > 0
+        for r in records:
+            assert r.chat_name == "Vibhu Kakkar", \
+                f"Expected 'Vibhu Kakkar', got '{r.chat_name}'"
+
+    def test_chat_name_from_filename_without_prefix(self, tmp_path):
+        """Filename without prefix must pass through unchanged."""
+        src = FIXTURES_DIR / "sample_whatsapp.txt"
+        content = src.read_text(encoding="utf-8")
+        dest = tmp_path / "Vibhu Kakkar.txt"
+        dest.write_text(content, encoding="utf-8")
+        records = self.parse(dest)
+        assert len(records) > 0
+        for r in records:
+            assert r.chat_name == "Vibhu Kakkar", \
+                f"Expected 'Vibhu Kakkar', got '{r.chat_name}'"
+
+    def test_chat_name_from_filename_case_insensitive_prefix(self, tmp_path):
+        """Lowercase prefix variant must also be stripped."""
+        src = FIXTURES_DIR / "sample_whatsapp.txt"
+        content = src.read_text(encoding="utf-8")
+        dest = tmp_path / "whatsapp chat with vibhu kakkar.txt"
+        dest.write_text(content, encoding="utf-8")
+        records = self.parse(dest)
+        assert len(records) > 0
+        for r in records:
+            assert r.chat_name == "vibhu kakkar", \
+                f"Expected 'vibhu kakkar', got '{r.chat_name}'"
+
+    def test_chat_name_argument_overrides_no_prefix_strip_needed(self, tmp_path):
+        """Explicit chat_name='Vibhu Kakkar' must pass through unchanged."""
+        src = FIXTURES_DIR / "sample_whatsapp.txt"
+        content = src.read_text(encoding="utf-8")
+        dest = tmp_path / "anything.txt"
+        dest.write_text(content, encoding="utf-8")
+        records = self.parse(dest, chat_name="My Custom Name")
+        assert len(records) > 0
+        for r in records:
+            assert r.chat_name == "My Custom Name"
         """A pathological single 'message' with no new timestamp must not OOM."""
         from brain.profiler.parsers import whatsapp as wa
         # Construct a real export: one timestamp header, then 100k junk lines

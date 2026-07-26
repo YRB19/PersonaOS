@@ -103,8 +103,10 @@ def parse_whatsapp_export(
 
     if not chat_name:
         chat_name = path.stem
-        if chat_name.startswith(WHATSAPP_CHAT_PREFIX):
-            chat_name = chat_name[len(WHATSAPP_CHAT_PREFIX):]
+
+    known_prefix = WHATSAPP_CHAT_PREFIX
+    if chat_name.lower().startswith(known_prefix.lower()):
+        chat_name = chat_name[len(known_prefix):].strip()
 
     records: list[MessageRecord] = []
 

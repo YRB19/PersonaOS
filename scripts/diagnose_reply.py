@@ -1,12 +1,14 @@
 """
 scripts/diagnose_reply.py
 
-Run this to diagnose exactly why _parse_reply_json is returning empty.
-It calls Ollama directly and prints the raw response with annotations.
+Calls the real build_prompt() from brain/generator/reply.py and the exact
+same Ollama call path used in production.  Prints the raw LLM response
+annotated with parsing diagnostics.
 
 Usage:
     python scripts/diagnose_reply.py
     python scripts/diagnose_reply.py --message "bhai free hai kal?"
+    python scripts/diagnose_reply.py --message "kya kar rahe ho?" --contact "Vibhu"
 """
 import sys
 import re
@@ -24,10 +26,26 @@ def section(title: str) -> None:
     print('─' * 60)
 
 
-def main(message: str) -> None:
+def build_system_user(contact: str, message: str) -> tuple[str, str]:
+    """
+    Call the real build_prompt() from the production pipeline.
+    When no profile / store is available the prompt degrades gracefully —
+    it still produces valid system + user strings using defaults.
+    """
+    from brain.generator.reply import build_prompt
+    return build_prompt(
+        incoming=message,
+        from_contact=contact,
+        profile=None,
+        relationship=None,
+        examples=[],
+    )
+
+
+def main(message: str, contact: str) -> None:
     print("\n═══ PersonaOS Reply Diagnostic ═══\n")
 
-    # ── 1. Test Ollama connection ──────────────────────────────────────────────
+    # ── 1. Ollama connection ──────────────────────────────────────────────────
     section("1. Ollama connection")
     try:
         import ollama
@@ -39,25 +57,42 @@ def main(message: str) -> None:
         print("  Fix: ollama serve")
         return
 
-    # ── 2. Test raw chat call ──────────────────────────────────────────────────
-    section("2. Raw ollama.chat() response")
+    # ── 2. Build prompt via the real production pipeline ──────────────────────
+    section("2. Prompt (from build_prompt())")
     model = "qwen3.5:9b"
-    system = 'You help draft WhatsApp replies. Output ONLY this JSON: {"replies": ["draft1", "draft2", "draft3"]}'
-    user   = f'Friend sent: "{message}"\n\nWrite 3 reply options as JSON.'
+
+    system, user = build_system_user(contact, message)
 
     print(f"  Model: {model}")
-    print(f"  System: {system[:80]}...")
-    print(f"  User:   {user[:80]}...")
+    print(f"  Contact: {contact}")
+    print(f"  System prompt ({len(system)} chars):")
+    print(f"\n{system}\n")
+    print(f"  User prompt ({len(user)} chars):")
+    print(f"\n{user}\n")
     print("\n  Calling Ollama (may take 30–60s)...")
 
+    # ── 3. Call Ollama (same code path as production _call_ollama) ───────────
+    section("3. Raw ollama.generate() response")
+    combined = f"{system}\n\n---\n\n{user}"
+
     try:
-        response = ollama.generate(
-            model=model,
-            prompt=f"{system}\n\n---\n\n{user}",
-            stream=False,
-            think=False,
-            options={"temperature": 0.85},
-        )
+        try:
+            response = ollama.generate(
+                model=model,
+                prompt=combined,
+                stream=False,
+                think=False,
+                options={"temperature": 0.85},
+            )
+        except TypeError:
+            # Older ollama library versions don't support think= kwarg
+            response = ollama.generate(
+                model=model,
+                prompt=combined,
+                stream=False,
+                options={"temperature": 0.85},
+            )
+
         if isinstance(response, dict):
             raw = (response.get("response", "") or "").strip()
         else:
@@ -68,11 +103,11 @@ def main(message: str) -> None:
         print(raw)
         print("  ── END OF RAW RESPONSE ──")
     except Exception as e:
-        print(f"  ✗ Chat call failed: {e}")
+        print(f"  ✗ Ollama call failed: {e}")
         return
 
-    # ── 3. Diagnose what's in the response ────────────────────────────────────
-    section("3. Response analysis")
+    # ── 4. Response analysis ──────────────────────────────────────────────────
+    section("4. Response analysis")
 
     has_think = "<think>" in raw
     has_json  = "{" in raw and "replies" in raw
@@ -82,14 +117,13 @@ def main(message: str) -> None:
     if has_think:
         think_content = re.findall(r"<think>(.*?)</think>", raw, re.DOTALL)
         print(f"  Think block length: {sum(len(t) for t in think_content)} chars")
-        # Show what's left after stripping
         stripped = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         print(f"\n  ── AFTER STRIPPING <think> ({len(stripped)} chars) ──")
         print(stripped)
         print("  ── END ──")
 
-    # ── 4. Try parsing ────────────────────────────────────────────────────────
-    section("4. Parsing result")
+    # ── 5. Try parsing ───────────────────────────────────────────────────────
+    section("5. Parsing result")
     from brain.generator.reply import _parse_reply_json, _strip_thinking
     cleaned = _strip_thinking(raw)
     result  = _parse_reply_json(raw, expected=3)
@@ -110,5 +144,7 @@ def main(message: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--message", "-m", default="bhai free hai kal?")
+    parser.add_argument("--contact", "-c", default="Friend",
+                        help="Contact / sender name (default: Friend)")
     args = parser.parse_args()
-    main(args.message)
+    main(args.message, args.contact)

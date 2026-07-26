@@ -5,18 +5,15 @@ Data contracts for Phase 3 — Media Intelligence.
 
 Three suggestion types:
   ReactionSuggestion  — emoji to react to an incoming message with
-  EmojiSuggestion     — emoji to include in a text reply (different from reaction)
-  GifResult           — a GIF returned from Tenor search
+  GifResult           — a GIF returned from Giphy search
   MediaSuggestion     — bundled output from the full media pipeline
 
 Design note: reaction vs reply emoji are different UX flows.
-  Reaction: one-tap emoji overlay on the message (like Instagram/WhatsApp react)
+  Reaction: one-tap emoji overlay on the message (WhatsApp/Telegram react)
   Reply emoji: emoji embedded in the reply text itself (handled by Phase 2B)
-Phase 3 covers reactions primarily. Reply emoji are already handled by the
-style profile in the generator prompt.
+Phase 3 covers reactions primarily.
 """
 from pydantic import BaseModel
-from typing import Optional
 
 
 class ReactionSuggestion(BaseModel):
@@ -36,25 +33,29 @@ class ReactionSuggestion(BaseModel):
 
 class GifResult(BaseModel):
     """
-    A single GIF from Tenor search.
+    A single GIF from Giphy search.
+
+    Migration note (2026-06-30):
+      Google permanently shut down the Tenor API on June 30, 2026.
+      Giphy is the standard replacement — used by Slack, Discord, iMessage.
+      source is always "giphy".
 
     preview_url: Small/low-res preview (for displaying in a list)
     url:         Full GIF URL (the one to actually send)
-    source:      Always "tenor" for now
     """
     title: str
     preview_url: str
     url: str
-    source: str = "tenor"
+    source: str = "giphy"
 
 
 class MediaSuggestion(BaseModel):
     """
     Bundled media suggestions for a given incoming message.
 
-    gif_query:           The search query used (shown in CLI so user can refine it)
+    gif_query:            The search query used (shown in CLI so user can refine)
     reaction_suggestions: Ranked list of emoji reactions
-    gif_results:          GIF results from Tenor (empty if no API key)
+    gif_results:          GIF results from Giphy (empty if no API key)
     """
     incoming_message: str
     from_contact: str = ""
