@@ -252,8 +252,9 @@ def _score_college_friend(s: ConversationSignals) -> tuple[float, list[str]]:
 def _score_family(s: ConversationSignals) -> tuple[float, list[str]]:
     """
     family: parent, sibling, relative.
-    REQUIRES strong unambiguous family terms (maa, papa, didi — not bhai alone).
+    REQUIRES strong unambiguous family terms (maa, papa — not bhaiya/didi alone).
     Check-in behavior with family terms is a strong compound signal.
+    Honorifics (bhaiya, didi) only contribute when corroborated by check-in behavior.
     """
     score = 0.0
     ev: list[str] = []
@@ -261,13 +262,30 @@ def _score_family(s: ConversationSignals) -> tuple[float, list[str]]:
     # ── Unambiguous family terms (highest weight) ─────────────────────────────
     if s.family_strong_hits >= 3:
         score += 5.0
-        ev.append(f"clear family terms used: {s.family_strong_hits} distinct terms (maa, papa, didi, etc.)")
+        ev.append(f"clear family terms used: {s.family_strong_hits} distinct terms (maa, papa, etc.)")
     elif s.family_strong_hits == 2:
         score += 3.5
         ev.append(f"family terms detected ({s.family_strong_hits} distinct terms)")
     elif s.family_strong_hits == 1:
         score += 1.5
         ev.append("one family term detected (weak signal — could be casual address)")
+
+    # ── Family honorifics — weak, need corroboration ──────────────────────────
+    # "bhaiya"/"didi" are honorifics that double as generic respectful address.
+    # Only count as family evidence when combined with check-in/logistics behavior.
+    if s.family_honorific_hits >= 1:
+        if s.has_checkin_behavior or s.family_compound_count >= 1:
+            score += 3.5
+            ev.append(
+                f"honorifics corroborated by check-in/logistics "
+                f"({s.family_honorific_hits}× bhaiya/didi + daily routines) — likely genuine family"
+            )
+        else:
+            score += 0.3
+            ev.append(
+                f"honorifics present but uncorroborated "
+                f"({s.family_honorific_hits}× bhaiya/didi without check-in pattern — could be respectful address)"
+            )
 
     # ── Family compound signal ─────────────────────────────────────────────────
     if s.family_compound_count >= 2:
@@ -355,10 +373,14 @@ def _score_colleague(s: ConversationSignals) -> tuple[float, list[str]]:
         score += 2.5
         ev.append(f"formal greetings: {s.formal_count} messages start formally")
 
-    # ── Topic: professional dominant ──────────────────────────────────────────
+    # ── Topic: professional dominant (proportional to strength) ────────────────
     if s.dominant_topic == "professional":
-        score += 2.0
-        ev.append(f"professional topics dominate ({s.topic_professional:.0%} of conversation)")
+        if s.topic_professional > 0.50:
+            score += 3.0
+            ev.append(f"professional topics heavily dominate ({s.topic_professional:.0%} of conversation)")
+        else:
+            score += 2.0
+            ev.append(f"professional topics dominate ({s.topic_professional:.0%} of conversation)")
 
     # ── Long structured messages ───────────────────────────────────────────────
     if s.avg_message_length > 120:
@@ -374,6 +396,21 @@ def _score_colleague(s: ConversationSignals) -> tuple[float, list[str]]:
     if s.avg_session_depth < 5 and s.sessions_per_week < 3:
         score += 0.5
         ev.append(f"task-focused short sessions: avg {s.avg_session_depth:.1f} messages")
+
+    # ── Honorific + professional compound (senior-junior professional) ────────
+    # "bhaiya check this PR" → not family, senior-junior professional relationship.
+    if s.honorific_colleague_compound_count >= 3:
+        score += 2.5
+        ev.append(
+            f"honorific + professional vocabulary ({s.honorific_colleague_compound_count}×"
+            f" — senior-junior professional pattern)"
+        )
+    elif s.honorific_colleague_compound_count >= 1:
+        score += 1.5
+        ev.append(
+            f"honorific + technical context ({s.honorific_colleague_compound_count}×"
+            f" — likely professional, not family)"
+        )
 
     return score, ev
 

@@ -141,16 +141,26 @@ COLLEGE_SOCIAL = {
 }
 
 # ── Family terms — strong (unambiguous) ───────────────────────────────────────
-# "bhai" and "ghar" removed — handled by compound detection
+# "bhai", "ghar", "bhaiya", "didi" removed — handled separately.
+# "bhai" is a compound signal; "bhaiya"/"didi" are honorifics that double as
+# generic respectful address in Indian culture (to shopkeepers, seniors, etc.)
+# and should NOT count as strong family evidence alone.
 FAMILY_STRONG = {
     "maa", "mom", "mum", "mama",
     "dad", "papa", "paa",
-    "didi", "bhaiya",
     "sis", "sister", "brother",
     "uncle", "aunty", "auntie",
     "nana", "nani", "dada", "dadi",
     "grandma", "grandpa", "gharwale",
 }
+
+# ── Family honorifics — weak (ambiguous) ──────────────────────────────────────
+# Used as respectful address to seniors in Indian culture, NOT literal kinship.
+# "bhaiya" = any older male (shopkeeper, colleague, stranger)
+# "didi"   = any older female (colleague, neighbor, stranger)
+# These need corroboration (check-in behavior, logistics) to count as family.
+# Without corroboration, they should NOT produce family classification.
+FAMILY_HONORIFICS = {"bhaiya", "didi"}
 
 # ── Nicknames and affectionate terms ──────────────────────────────────────────
 # Presence signals CLOSE relationship (not necessarily romantic).
@@ -321,6 +331,34 @@ def _is_planning_compound(text: str) -> bool:
     return any(phrase in text_l for phrase in PLANNING_PHRASES)
 
 
+# ── Technical work vocabulary (for honorific+professional compound) ────────────
+# Programming, DevOps, and software engineering terms that indicate
+# professional/technical context when combined with a family honorific.
+TECHNICAL_WORK_TERMS = {
+    "code", "github", "json", "csv", "script", "backend", "frontend",
+    "api", "deploy", "commit", "branch", "merge", "pull", "repo",
+    "debug", "fix", "bug", "feature", "test", "build", "release",
+    "server", "database", "query", "endpoint", "error", "log",
+    "compile", "run", "execute", "version", "update", "upgrade",
+    "configure", "install", "setup", "migrate", "refactor", "optimize",
+}
+
+
+def _is_honorific_colleague_compound(text: str) -> bool:
+    """
+    Detect: family honorific + technical/professional vocabulary = colleague/mentor.
+    "bhaiya check this PR" → NOT family, senior-junior professional relationship.
+    "didi code review pending" → NOT family, professional context.
+
+    This mirrors the college_friend compound pattern but for professional contexts.
+    """
+    text_l = text.lower()
+    tokens = set(_tokenize_normalized(text))
+    has_honorific = any(w in text_l.split() for w in FAMILY_HONORIFICS)
+    has_technical = bool(tokens & (WORK_KEYWORDS | TECHNICAL_WORK_TERMS | COLLEGE_ACADEMIC))
+    return has_honorific and has_technical
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CONVERSATION SIGNALS DATACLASS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -345,6 +383,7 @@ class ConversationSignals:
     college_social_hits:   int        = 0
     work_hits:           int          = 0
     family_strong_hits:  int          = 0
+    family_honorific_hits: int        = 0
     romantic_hits:       int          = 0
     nickname_hits:       int          = 0
     formal_count:        int          = 0
@@ -358,6 +397,7 @@ class ConversationSignals:
     # ── Compound signals ──────────────────────────────────────────────────────
     college_friend_compound_count: int = 0
     family_compound_count:         int = 0
+    honorific_colleague_compound_count: int = 0
 
     # ── Behavioral pattern flags ──────────────────────────────────────────────
     # Set to True when pattern appears enough to be meaningful
@@ -465,6 +505,7 @@ def _extract_vocabulary(text_msgs: list[MessageRecord], signals: ConversationSig
     social_counter:   Counter = Counter()
     work_counter:     Counter = Counter()
     family_counter:   Counter = Counter()
+    family_honorific_counter: Counter = Counter()
     romantic_counter: Counter = Counter()
     nickname_counter: Counter = Counter()
 
@@ -485,6 +526,7 @@ def _extract_vocabulary(text_msgs: list[MessageRecord], signals: ConversationSig
             if w in COLLEGE_SOCIAL:    social_counter[w]   += 1
             if w in WORK_KEYWORDS:     work_counter[w]     += 1
             if w in FAMILY_STRONG:     family_counter[w]   += 1
+            if w in FAMILY_HONORIFICS: family_honorific_counter[w] += 1
             if w in ROMANTIC_TERMS:    romantic_counter[w] += 1
             if w in NICKNAME_TERMS:    nickname_counter[w] += 1
 
@@ -498,6 +540,7 @@ def _extract_vocabulary(text_msgs: list[MessageRecord], signals: ConversationSig
     signals.college_social_hits   = len(social_counter)
     signals.work_hits             = len(work_counter)
     signals.family_strong_hits    = sum(family_counter.values())
+    signals.family_honorific_hits = sum(family_honorific_counter.values())
     signals.romantic_hits         = sum(romantic_counter.values())
     signals.nickname_hits         = sum(nickname_counter.values())
     signals.formal_count          = formal_count
@@ -555,12 +598,15 @@ def _detect_compound_signals(text_msgs: list[MessageRecord], signals: Conversati
 
     These resolve the ambiguity that arises from counting words separately.
     "bhai assignment bhej de" → college_friend_compound (not family + academic).
+    "bhaiya check this PR" → honorific_colleague_compound (not family).
     """
     for m in text_msgs:
         if _is_college_friend_compound(m.content):
             signals.college_friend_compound_count += 1
         if _is_family_compound(m.content):
             signals.family_compound_count += 1
+        if _is_honorific_colleague_compound(m.content):
+            signals.honorific_colleague_compound_count += 1
 
 
 def _extract_behaviors(signals: ConversationSignals) -> None:

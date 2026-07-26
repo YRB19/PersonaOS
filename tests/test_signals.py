@@ -7,7 +7,7 @@ Run with:
     pytest tests/test_signals.py -v
 """
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from brain.profiler.models import MessageRecord
 from brain.profiler.signals import (
     ConversationSignals,
@@ -16,6 +16,7 @@ from brain.profiler.signals import (
     _tokenize_normalized,
     _is_college_friend_compound,
     _is_family_compound,
+    _is_honorific_colleague_compound,
     PLANNING_PHRASES,
     CHECKIN_PHRASES,
     EMOTIONAL_PHRASES,
@@ -40,6 +41,26 @@ def _msg(
         chat_name="Test Chat",
         has_emoji=has_emoji,
         has_media=has_media,
+        word_count=len(content.split()),
+        char_count=len(content),
+    )
+
+
+def _msg_dated(
+    sender: str,
+    content: str,
+    day: int = 1,
+    hour: int = 14,
+) -> MessageRecord:
+    """Message with configurable date for realistic multi-session fixtures."""
+    return MessageRecord(
+        timestamp=datetime(2024, 6, day, hour, 0, 0),
+        sender=sender,
+        content=content,
+        platform="whatsapp",
+        chat_name="Test Chat",
+        has_emoji=False,
+        has_media=False,
         word_count=len(content.split()),
         char_count=len(content),
     )
@@ -154,6 +175,26 @@ class TestCompoundSignals:
 
     def test_no_family_compound_generic(self):
         assert _is_family_compound("kya scene hai yaar") is False
+
+    def test_honorific_colleague_compound_bhaiya_review(self):
+        """bhaiya + review (work keyword) → honorific_colleague compound."""
+        assert _is_honorific_colleague_compound("bhaiya review pending hai") is True
+
+    def test_honorific_colleague_compound_didi_code(self):
+        """didi + code (technical term) → honorific_colleague compound."""
+        assert _is_honorific_colleague_compound("didi code push kar diya") is True
+
+    def test_honorific_colleague_compound_bhaiya_github(self):
+        """bhaiya + github (technical term) → honorific_colleague compound."""
+        assert _is_honorific_colleague_compound("bhaiya github pe check karo") is True
+
+    def test_no_honorific_colleague_without_honorific(self):
+        """Technical content without honorific is NOT a compound."""
+        assert _is_honorific_colleague_compound("review pending hai code push karo") is False
+
+    def test_no_honorific_colleague_without_technical(self):
+        """Honorific without technical content is NOT a compound."""
+        assert _is_honorific_colleague_compound("bhaiya kya scene hai") is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -382,3 +423,231 @@ class TestClassifierContextAware:
         for s in signals:
             assert isinstance(s, str)
             assert len(s) > 5
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Honorific + professional topic compound tests
+# Regression: Dev (62 msgs, technical, uses "bhaiya") was misclassified as family
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestHonorificProfessionalCompound:
+    """
+    Tests for the compound signal: family honorific + technical vocabulary → colleague.
+
+    This fixes the Dev misclassification where "bhaiya" (honorific, not kinship)
+    + heavy technical content was producing a false-positive family classification.
+    """
+
+    def _dev_msgs(self) -> list[MessageRecord]:
+        """
+        Fixture simulating the Dev conversation:
+        - ~62 messages, technical/professional content
+        - Uses "bhaiya" as respectful address (not literal brother)
+        - Topics: IPL auction backend scripts, CSV/JSON formats, GitHub repos, code review
+        - Mix of technical terms AND work vocabulary (meeting, sprint, review, feedback)
+        - No check-in behavior, no emotional support
+        - Timestamps spread across multiple sessions (realistic)
+        """
+        base = datetime(2024, 6, 1, 10, 0, 0)
+
+        # Technical + work messages (core content — includes WORK_KEYWORDS terms)
+        tech_work_msgs = [
+            "bhaiya check this pull request on github",
+            "bhaiya the csv format needs updating for the ipl auction backend",
+            "bhaiya json response format change kiya hai",
+            "bhaiya code review pending hai dekh lo",
+            "bhaiya sprint review karna hai kal client ke saath",
+            "bhaiya feedback de do is feature pe",
+            "bhaiya meeting hai 3pm ko agenda ready karo",
+            "bhaiya deliverable submit karna hai friday tak",
+            "bhaiya standup mein update dena hai",
+            "bhaiya backend script chal nahi raha hai",
+            "bhaiya database query optimize karo",
+            "bhaiya api endpoint return format change karo",
+            "bhaiya github pe commit push kar diya",
+            "bhaiya feature branch pe kaam kar raha hun",
+            "bhaiya bug fix karna hai is sprint mein",
+            "bhaiya server logs check karo error aa raha hai",
+            "bhaiya deployment pipeline setup karna hai",
+            "bhaiya code refactor karna hai purane wala",
+            "bhaiya build fail ho raha hai test mein",
+            "bhaiya release notes likh do",
+        ]
+        extra_tech_msgs = [
+            "haan bhaiya dekh raha hun",
+            "bhaiya ye code optimize karna hai",
+            "bhaiya testing complete ho gayi",
+            "bhaiya pr merge kar do",
+            "bhaiya code review done hai",
+            "bhaiya bug fix ready hai",
+            "bhaiya deployment ready hai",
+            "bhaiya release kar sakte hain",
+            "bhaiya git stash kar do pehle",
+            "bhaiya branch create kar diya",
+            "bhaiya code linting pass ho gayi",
+            "bhaiya api documentation update karo",
+            "bhaiya database backup le lo",
+            "bhaiya server restart karo please",
+            "bhaiya logs share kar do",
+            "bhaiya error fix ho gaya",
+            "bhaiya build green hai ab",
+            "bhaiya pipeline pass ho gayi",
+            "bhaiya code quality check karo",
+            "bhaiya pr approve kar do",
+            "bhaiya feature branch delete kar do ab",
+            "bhaiya staging pe deploy karo",
+            "bhaiya production ready hai ye",
+            "bhaiya release notes final kar do",
+            "bhaiya sprint mein ye complete karna hai",
+            "bhaiya backlog check karo kya pending hai",
+            "bhaiya task assign kar do isme",
+            "bhaiya ye ticket close kar do",
+            "bhaiya next sprint planning hai kal",
+            "bhaiya standup mein update dena hai",
+            "bhaiya codebase refactor karna hai purana wala",
+            "bhaiya unit tests likh do iske liye",
+            "bhaiya integration test bhi add karo",
+            "bhaiya code coverage improve karo",
+            "bhaiya performance test bhi karna hai",
+            "bhaiya load testing karo ispe",
+            "bhaiya security review bhi karna hai",
+            "bhaiya dependency update karni hai",
+            "bhaiya package upgrade karo",
+            "bhaiya client ko deliver karna hai ye",
+        ]
+        all_contents = tech_work_msgs + extra_tech_msgs
+        all_contents = all_contents[:62]
+
+        # Spread across multiple sessions (gaps > 4 hours between groups)
+        msgs = []
+        for i, content in enumerate(all_contents):
+            day_offset = i // 20
+            hour = 10 + (i % 8) * 2  # 10, 12, 14, 16, 18, 20, 22, 0
+            ts = base + timedelta(days=day_offset, hours=(hour - 10))
+            msgs.append(MessageRecord(
+                timestamp=ts,
+                sender="Rishit",
+                content=content,
+                platform="whatsapp",
+                chat_name="WhatsApp Chat with Dev",
+                has_emoji=False,
+                has_media=False,
+                word_count=len(content.split()),
+                char_count=len(content),
+            ))
+        return msgs
+
+    def test_honorific_heavy_professional_classifies_as_colleague(self):
+        """
+        Dev-like fixture: heavy "bhaiya" usage + technical vocabulary
+        should classify as colleague, NOT family.
+
+        This is the core regression test for the Dev misclassification.
+        """
+        msgs = self._dev_msgs()
+        rel_type, confidence, signals = classify_relationship(msgs, msgs)
+        assert rel_type == "colleague", \
+            f"Expected colleague, got {rel_type} (confidence={confidence})"
+        assert confidence >= 0.40, \
+            f"Confidence too low: {confidence}"
+
+    def test_honorific_hits_detected_but_not_family(self):
+        """
+        Honorifics are detected (family_honorific_hits > 0) but should NOT
+        produce family_strong_hits (they're not in FAMILY_STRONG anymore).
+        """
+        msgs = self._dev_msgs()
+        result = extract_conversation_signals(msgs, msgs)
+        assert result.family_honorific_hits > 0, \
+            "Honorifics should be detected"
+        assert result.family_strong_hits == 0, \
+            f"Family strong hits should be 0 (no maa/papa/etc.), got {result.family_strong_hits}"
+
+    def test_honorific_colleague_compound_detected(self):
+        """
+        The compound signal (honorific + technical vocabulary) should fire
+        for messages containing "bhaiya" + technical terms.
+        """
+        msgs = self._dev_msgs()
+        result = extract_conversation_signals(msgs, msgs)
+        assert result.honorific_colleague_compound_count > 0, \
+            "Honorific+professional compound should be detected"
+
+    def test_family_score_low_for_honorific_only(self):
+        """
+        Family score should be low when only honorifics are present
+        (no unambiguous family terms, no check-in behavior).
+        """
+        msgs = self._dev_msgs()
+        scores = get_all_scores(msgs, msgs)
+        family_score = scores.get("family", (0.0, []))[0]
+        assert family_score < 0.30, \
+            f"Family score should be low for honorific-only contact, got {family_score}"
+
+    def test_genuine_family_with_didi_still_classifies(self):
+        """
+        "didi" in a genuine family context (with check-in behavior) should
+        still classify as family. Timestamps spread across multiple days
+        to avoid inflated session dynamics.
+        """
+        msgs = [
+            _msg_dated("Rishit", "didi khana khaya kya", day=d, hour=18)
+            for d in range(1, 6)
+        ] + [
+            _msg_dated("Rishit", "didi ghar kab aa rahi ho", day=d, hour=19)
+            for d in range(1, 6)
+        ] + [
+            _msg_dated("Rishit", "didi so gayi ho kya", day=d, hour=21)
+            for d in range(1, 6)
+        ]
+        rel_type, confidence, _ = classify_relationship(msgs, msgs)
+        assert rel_type == "family", \
+            f"Expected family (didi + check-ins), got {rel_type}"
+        assert confidence >= 0.40, \
+            f"Confidence too low: {confidence}"
+
+    def test_genuine_family_with_bhaiya_still_classifies(self):
+        """
+        "bhaiya" in a genuine family context (with check-in behavior) should
+        still classify as family.
+        """
+        msgs = [
+            _msg_dated("Rishit", "bhaiya khana khaya kya", day=d, hour=18)
+            for d in range(1, 6)
+        ] + [
+            _msg_dated("Rishit", "bhaiya ghar kab aa raha hai", day=d, hour=19)
+            for d in range(1, 6)
+        ] + [
+            _msg_dated("Rishit", "bhaiya so gaya kya", day=d, hour=21)
+            for d in range(1, 6)
+        ]
+        rel_type, confidence, _ = classify_relationship(msgs, msgs)
+        assert rel_type == "family", \
+            f"Expected family (bhaiya + check-ins), got {rel_type}"
+        assert confidence >= 0.40, \
+            f"Confidence too low: {confidence}"
+
+    def test_honorific_without_technical_not_colleague(self):
+        """
+        "bhaiya" without technical vocabulary should NOT classify as colleague.
+        It should be acquaintance or similar — not enough evidence for any strong type.
+        """
+        msgs = (
+            [_msg("Rishit", "bhaiya kya scene hai", hour=18)] * 6 +
+            [_msg("Rishit", "bhaiya kahan ho abhi", hour=19)] * 6 +
+            [_msg("Rishit", "bhaiya call karo kabhi", hour=20)] * 6
+        )
+        rel_type, confidence, _ = classify_relationship(msgs, msgs)
+        assert rel_type != "colleague", \
+            f"Honorific without technical should NOT be colleague, got {rel_type}"
+
+    def test_all_scores_show_colleague_wins(self):
+        """
+        In the Dev-like fixture, colleague score should clearly beat family score.
+        """
+        msgs = self._dev_msgs()
+        scores = get_all_scores(msgs, msgs)
+        colleague_score = scores.get("colleague", (0.0, []))[0]
+        family_score = scores.get("family", (0.0, []))[0]
+        assert colleague_score > family_score, \
+            f"Colleague ({colleague_score}) should beat family ({family_score})"
