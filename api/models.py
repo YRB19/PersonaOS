@@ -41,6 +41,14 @@ class ReplyResponse(BaseModel):
     model: str
     store_size: int
     contact: str
+    explainability: dict | None = Field(
+        default=None,
+        description=(
+            "Why these drafts: intent, emotion, stage, language, relationship, "
+            "retrieved_examples_count/previews, has_profile, has_relationship, "
+            "silence_skip, silence_reason. null only if the generator returned no record."
+        ),
+    )
 
 
 class ReactionItem(BaseModel):

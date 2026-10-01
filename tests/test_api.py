@@ -69,6 +69,11 @@ def client(tmp_path_factory):
     TestClient with heavy singletons patched out.
     PersonaStore and ReplyGenerator constructors are replaced with mocks
     so the lifespan completes without touching disk or Ollama.
+
+    Order matters: importlib.reload() re-executes the module and rebinds
+    ReplyGenerator/PersonaStore from their real imports, which silently undoes
+    any patch applied before it. So env vars -> reload -> patch names ->
+    start client (lifespan runs inside the patches).
     """
     tmp = tmp_path_factory.mktemp("api_test")
     _make_minimal_profile(tmp)
@@ -77,23 +82,63 @@ def client(tmp_path_factory):
     mock_store.count.return_value = 100
 
     mock_gen = MagicMock()
-    mock_gen.generate.return_value = [
-        "haan yaar chalte hain",
-        "theek hai bro sounds good",
-        "lol yes fr im free",
-    ]
+    # Mirrors the real v6 contract: ReplyGenerator.generate() -> (drafts, explainability).
+    # Keys match ExplainabilityRecord.to_dict() so drift there surfaces here.
+    mock_gen.generate.return_value = (
+        [
+            "haan yaar chalte hain",
+            "theek hai bro sounds good",
+            "lol yes fr im free",
+        ],
+        {
+            "intent": "question",
+            "emotion": "neutral",
+            "stage": "unknown",
+            "language": "hinglish",
+            "relationship_type": "close_friend",
+            "relationship_label": "close friend",
+            "retrieved_examples_count": 2,
+            "retrieved_example_previews": ["chalte hain aaj?", "haan bhai pkka"],
+            "has_profile": True,
+            "has_relationship": True,
+            "silence_skip": False,
+            "silence_reason": "",
+        },
+    )
 
-    with patch("api.server.PersonaStore", return_value=mock_store), \
-         patch("api.server.ReplyGenerator", return_value=mock_gen), \
-         patch.dict("os.environ", {
-             "CHROMA_PATH":  str(tmp / "chroma"),
-             "PROFILES_DIR": str(tmp / "profiles"),
-         }):
+    # PROFILES_DIR is read at import time, so env must be set before the reload.
+    with patch.dict("os.environ", {
+        "CHROMA_PATH":  str(tmp / "chroma"),
+        "PROFILES_DIR": str(tmp / "profiles"),
+    }):
         import importlib
         import api.server as srv
         importlib.reload(srv)
-        with TestClient(srv.app) as c:
-            yield c, tmp
+
+        with patch("api.server.PersonaStore", return_value=mock_store), \
+             patch("api.server.ReplyGenerator", return_value=mock_gen):
+            assert srv.ReplyGenerator.return_value is mock_gen, "patch did not survive reload"
+            assert srv.PersonaStore.return_value is mock_store, "patch did not survive reload"
+            with TestClient(srv.app) as c:
+                yield c, tmp
+
+
+@pytest.fixture
+def gen_mock(client):
+    """
+    The mocked ReplyGenerator instance behind /suggest/reply.
+
+    The client fixture is module-scoped, so tests that need a different
+    generate() return value must go through this fixture: it restores the
+    original return_value on teardown, keeping the shared mock clean
+    regardless of test ordering.
+    """
+    import api.server as srv
+    gen = srv._generator
+    assert gen is not None, "lifespan must have installed the mocked generator"
+    original = gen.generate.return_value
+    yield gen
+    gen.generate.return_value = original
 
 
 # ── /health ────────────────────────────────────────────────────────────────────
@@ -305,6 +350,114 @@ class TestReplyEndpoint:
             "num_drafts": 50,
         })
         assert r.status_code == 422
+
+    def test_generator_tuple_is_unpacked_into_drafts(self, client):
+        """generate() returns (drafts, explainability) since prompt v6."""
+        c, _ = client
+        data = c.post("/suggest/reply", json={
+            "incoming": "are you free tonight?",
+            "from_contact": "Priya",
+            "user_name": "Rishit Babbar",
+        }).json()
+        assert data["drafts"] == [
+            "haan yaar chalte hain",
+            "theek hai bro sounds good",
+            "lol yes fr im free",
+        ]
+
+    def test_explainability_key_always_present(self, client):
+        c, _ = client
+        data = c.post("/suggest/reply", json={
+            "incoming": "hi",
+            "from_contact": "Priya",
+            "user_name": "Rishit Babbar",
+        }).json()
+        assert "explainability" in data
+
+    def test_explainability_populated(self, client):
+        c, _ = client
+        data = c.post("/suggest/reply", json={
+            "incoming": "bhai free hai kal?",
+            "from_contact": "Shreyansh",
+            "user_name": "Rishit Babbar",
+        }).json()
+        expl = data["explainability"]
+        assert isinstance(expl, dict)
+        assert expl["language"] == "hinglish"
+        assert expl["intent"] == "question"
+        assert expl["has_profile"] is True
+        assert expl["silence_skip"] is False
+
+    def test_explainability_passes_through_unmodified(self, client, gen_mock):
+        """The whole record reaches the client — no key dropped or rewritten."""
+        c, _ = client
+        expected = {"lang": "hinglish"}
+        gen_mock.generate.return_value = (["a", "b"], expected)
+        data = c.post("/suggest/reply", json={
+            "incoming": "bhai kya scene hai",
+            "from_contact": "Shreyansh",
+            "user_name": "Rishit Babbar",
+        }).json()
+        assert data["drafts"] == ["a", "b"]
+        assert data["explainability"] == expected
+
+    def test_smart_silence_returns_200_with_empty_drafts(self, client, gen_mock):
+        """
+        Smart silence is a valid 200, not an error. The client distinguishes it
+        from a broken generator via explainability["silence_skip"].
+        """
+        c, _ = client
+        gen_mock.generate.return_value = ([], {
+            "intent": "general",
+            "emotion": "neutral",
+            "stage": "unknown",
+            "language": "hinglish",
+            "relationship_type": "unknown",
+            "relationship_label": "friend",
+            "retrieved_examples_count": 0,
+            "retrieved_example_previews": [],
+            "has_profile": False,
+            "has_relationship": False,
+            "silence_skip": True,
+            "silence_reason": "low-value acknowledgment message",
+        })
+        r = c.post("/suggest/reply", json={
+            "incoming": "ok",
+            "from_contact": "Priya",
+            "user_name": "Rishit Babbar",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["drafts"] == []
+        assert data["explainability"]["silence_skip"] is True
+        assert data["explainability"]["silence_reason"] == "low-value acknowledgment message"
+
+    def test_explainability_null_when_generator_omits_it(self, client, gen_mock):
+        c, _ = client
+        gen_mock.generate.return_value = (["only draft"], None)
+        r = c.post("/suggest/reply", json={
+            "incoming": "are you free tonight?",
+            "from_contact": "Priya",
+            "user_name": "Rishit Babbar",
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["drafts"] == ["only draft"]
+        assert data["explainability"] is None
+
+    def test_existing_fields_unchanged_by_explainability(self, client, gen_mock):
+        """Backward compatibility: model / store_size / contact keep their shape."""
+        c, _ = client
+        gen_mock.generate.return_value = (["a"], {"intent": "question"})
+        data = c.post("/suggest/reply", json={
+            "incoming": "hi",
+            "from_contact": "Priya",
+            "user_name": "Rishit Babbar",
+            "model": "qwen3.5:9b",
+        }).json()
+        assert data["model"] == "qwen3.5:9b"
+        assert data["contact"] == "Priya"
+        assert isinstance(data["store_size"], int)
 
 
 # ── /profile/{name} ────────────────────────────────────────────────────────────

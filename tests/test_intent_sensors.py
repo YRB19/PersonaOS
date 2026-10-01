@@ -6,6 +6,8 @@ that powers features 3, 4, 5, 6, 7, 8.
 
 All tests are pure Python, zero external dependencies, fast.
 """
+import json
+
 import pytest
 from brain.generator.intent_sensors import (
     detect_intent,
@@ -36,6 +38,46 @@ from brain.generator.intent_sensors import (
     LANG_HINGLISH,
     LANG_ENGLISH,
 )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Canned LLM — keeps generate() tests offline
+# ══════════════════════════════════════════════════════════════════════════════
+
+_CANNED_DRAFTS = [
+    "haan yaar chalte hain",
+    "theek hai bro sounds good",
+    "lol yes fr im free",
+]
+_CANNED_LLM_JSON = json.dumps({"replies": _CANNED_DRAFTS})
+
+
+class _FakeOllama:
+    """
+    Stand-in for the ollama module's generate().
+
+    ReplyGenerator._call_ollama does `import ollama` inside the function body and
+    calls ollama.generate(...), so patching the attribute on the real module is
+    enough — no import-time patching required. `calls` lets a test assert the LLM
+    was reached (or deliberately skipped).
+    """
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def generate(self, **kwargs):
+        self.calls.append(kwargs)
+        # _call_ollama reads .response off a dict or a response object
+        return {"response": _CANNED_LLM_JSON}
+
+
+@pytest.fixture
+def fake_ollama(monkeypatch):
+    """Replace ollama.generate with the canned response for one test."""
+    ollama = pytest.importorskip("ollama")
+    fake = _FakeOllama()
+    monkeypatch.setattr(ollama, "generate", fake.generate)
+    return fake
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -409,114 +451,82 @@ class TestPromptV6:
 # ReplyGenerator v6 API — generate() returns (list[str], dict)
 # ══════════════════════════════════════════════════════════════════════════════
 
+class _NoOpStore:
+    """Store stub — empty corpus, so retrieval always returns nothing."""
+    def count(self):                           return 0
+    def retrieve_similar(self, *a, **kw):      return []
+    def retrieve_similar_lang_aware(self, *a, **kw): return []
+
+
+@pytest.fixture
+def gen(tmp_path, fake_ollama):
+    """ReplyGenerator wired to _NoOpStore + the canned LLM response."""
+    from brain.generator.reply import ReplyGenerator
+    return ReplyGenerator(_NoOpStore(), profiles_dir=tmp_path)
+
+
 class TestReplyGeneratorV6NoOllama:
-    """Smoke tests — no Ollama needed."""
+    """
+    generate()'s v6 contract: (drafts, explainability).
 
-    def test_generate_returns_tuple(self, tmp_path):
-        from brain.generator.reply import ReplyGenerator
+    fake_ollama replaces ollama.generate, so these stay offline and fast while
+    still asserting on real drafts — the old versions hit the live LLM and the
+    draft assertions passed vacuously because they were never non-empty.
+    """
 
-        class NoOpStore:
-            def count(self): return 0
-            def retrieve_similar(self, *a, **kw): return []
-            def retrieve_similar_lang_aware(self, *a, **kw): return []
-
-        gen = ReplyGenerator(NoOpStore(), profiles_dir=tmp_path)
+    def test_generate_returns_tuple(self, gen):
         result = gen.generate("hello how are you?", "Priya", "TestUser")
         assert isinstance(result, tuple)
         assert len(result) == 2
         drafts, explain = result
-        assert isinstance(drafts, list) or drafts == []
+        assert isinstance(drafts, list)
         assert isinstance(explain, dict)
 
-    def test_generate_legacy_returns_list(self, tmp_path):
-        from brain.generator.reply import ReplyGenerator
+    def test_drafts_are_non_empty_strings(self, gen):
+        drafts, _ = gen.generate("hello how are you?", "Priya", "TestUser")
+        assert len(drafts) > 0, "canned LLM response must survive the pipeline"
+        assert drafts == _CANNED_DRAFTS
+        for d in drafts:
+            assert isinstance(d, str) and len(d.strip()) > 0
 
-        class NoOpStore:
-            def count(self): return 0
-            def retrieve_similar(self, *a, **kw): return []
-            def retrieve_similar_lang_aware(self, *a, **kw): return []
-
-        gen = ReplyGenerator(NoOpStore(), profiles_dir=tmp_path)
+    def test_generate_legacy_returns_list(self, gen):
         drafts = gen.generate_legacy("hi", "Priya", "TestUser")
         assert isinstance(drafts, list)
+        assert len(drafts) > 0
+        assert drafts == _CANNED_DRAFTS
 
-    def test_smart_silence_ok_returns_empty_drafts(self, tmp_path):
-        from brain.generator.reply import ReplyGenerator
-
-        class NoOpStore:
-            def count(self): return 0
-            def retrieve_similar(self, *a, **kw): return []
-            def retrieve_similar_lang_aware(self, *a, **kw): return []
-
-        gen = ReplyGenerator(NoOpStore(), profiles_dir=tmp_path)
+    def test_smart_silence_ok_returns_empty_drafts(self, gen, fake_ollama):
         drafts, explain = gen.generate("ok", "Priya", "TestUser")
         assert drafts == []
         assert explain.get("silence_skip") is True
+        assert len(fake_ollama.calls) == 0, "silence must short-circuit before the LLM"
 
-    def test_smart_silence_haan_no_drafts(self, tmp_path):
-        from brain.generator.reply import ReplyGenerator
-
-        class NoOpStore:
-            def count(self): return 0
-            def retrieve_similar(self, *a, **kw): return []
-            def retrieve_similar_lang_aware(self, *a, **kw): return []
-
-        gen = ReplyGenerator(NoOpStore(), profiles_dir=tmp_path)
+    def test_smart_silence_haan_no_drafts(self, gen, fake_ollama):
         drafts, explain = gen.generate("haan", "Priya", "TestUser")
         assert drafts == []
+        assert explain["silence_skip"] is True
+        assert len(fake_ollama.calls) == 0, "silence must short-circuit before the LLM"
 
-    def test_explainability_has_keys(self, tmp_path):
-        from brain.generator.reply import ReplyGenerator
-
-        class NoOpStore:
-            def count(self): return 0
-            def retrieve_similar(self, *a, **kw): return []
-            def retrieve_similar_lang_aware(self, *a, **kw): return []
-
-        gen = ReplyGenerator(NoOpStore(), profiles_dir=tmp_path)
+    def test_explainability_has_keys(self, gen):
         _, explain = gen.generate("hello there!", "Priya", "TestUser")
         assert isinstance(explain, dict)
         for k in ("intent", "emotion", "language", "silence_skip"):
             assert k in explain
 
-    def test_question_incoming_gets_question_intent(self, tmp_path):
-        from brain.generator.reply import ReplyGenerator
-
-        class NoOpStore:
-            def count(self): return 0
-            def retrieve_similar(self, *a, **kw): return []
-            def retrieve_similar_lang_aware(self, *a, **kw): return []
-
-        gen = ReplyGenerator(NoOpStore(), profiles_dir=tmp_path)
+    def test_question_incoming_gets_question_intent(self, gen):
         drafts, explain = gen.generate("free tonight?", "Priya", "TestUser")
         assert explain["intent"] == "question"
-        # No Ollama → no drafts, but intent is correctly detected
-        # (drafts come from LLM — these return [] in NoOpStore tests)
+        assert len(drafts) > 0
 
-    def test_language_detection_in_explainability(self, tmp_path):
-        from brain.generator.reply import ReplyGenerator
-
-        class NoOpStore:
-            def count(self): return 0
-            def retrieve_similar(self, *a, **kw): return []
-            def retrieve_similar_lang_aware(self, *a, **kw): return []
-
-        gen = ReplyGenerator(NoOpStore(), profiles_dir=tmp_path)
+    def test_language_detection_in_explainability(self, gen):
         _, explain = gen.generate(
             "haan bhai ghar pahuch gaya", "Priya", "TestUser",
         )
         assert explain["language"] in ("english", "hinglish")
 
-    def test_last_explainability(self, tmp_path):
-        from brain.generator.reply import ReplyGenerator
-
-        class NoOpStore:
-            def count(self): return 0
-            def retrieve_similar(self, *a, **kw): return []
-            def retrieve_similar_lang_aware(self, *a, **kw): return []
-
-        gen = ReplyGenerator(NoOpStore(), profiles_dir=tmp_path)
+    def test_last_explainability(self, gen):
         gen.generate("heyy how are you?", "Priya", "TestUser")
         d = gen.last_explainability()
         assert isinstance(d, dict)
         assert len(d) > 0
+        assert d == gen._last_explainability

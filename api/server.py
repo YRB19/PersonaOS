@@ -157,7 +157,7 @@ async def suggest_reply(req: ReplyRequest):
         raise HTTPException(503, "Generator not initialised — server still starting up")
 
     try:
-        drafts = await _in_executor(
+        drafts, explainability = await _in_executor(
             lambda: _generator.generate(
                 incoming=req.incoming,
                 from_contact=req.from_contact,
@@ -170,11 +170,14 @@ async def suggest_reply(req: ReplyRequest):
     except Exception as e:
         raise HTTPException(500, f"Reply generation failed: {e}")
 
+    # drafts == [] is a valid 200 — smart silence. The reason rides in
+    # explainability["silence_skip"] / ["silence_reason"], same as the CLI.
     return ReplyResponse(
-        drafts=drafts,
+        drafts=list(drafts),
         model=req.model,
         store_size=_store.count() if _store else 0,
         contact=req.from_contact,
+        explainability=explainability,
     )
 
 
