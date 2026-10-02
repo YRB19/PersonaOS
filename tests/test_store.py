@@ -131,29 +131,29 @@ class TestHelpers:
         v4: _build_where now uses $or to match against both the stripped
         name AND prefixed variants — preventing Bug 2 (silent zero-results).
         """
-        result = _build_where(None, "WhatsApp Chat with Vibhu Kakkar")
+        result = _build_where(None, "WhatsApp Chat with Sample Contact")
         assert "$or" in result
         branches = result["$or"]
         branch_values = [b["chat_name"]["$eq"] for b in branches]
-        assert "Vibhu Kakkar" in branch_values
-        assert "WhatsApp Chat with Vibhu Kakkar" in branch_values
+        assert "Sample Contact" in branch_values
+        assert "WhatsApp Chat with Sample Contact" in branch_values
 
     def test_build_where_chat_filter_already_stripped(self):
         """
         chat_filter without legacy prefix still produces an $or clause
         containing both the canonical and every prefixed form.
         """
-        result = _build_where(None, "Vibhu Kakkar")
+        result = _build_where(None, "Sample Contact")
         assert "$or" in result
         branch_values = [b["chat_name"]["$eq"] for b in result["$or"]]
-        assert "Vibhu Kakkar" in branch_values
-        assert "WhatsApp Chat with Vibhu Kakkar" in branch_values
+        assert "Sample Contact" in branch_values
+        assert "WhatsApp Chat with Sample Contact" in branch_values
 
     def test_build_where_strips_legacy_prefix_with_sender(self):
         """
         Both filters together: legacy prefix still handled via $or.
         """
-        result = _build_where("Rishit", "WhatsApp Chat with Vibhu Kakkar")
+        result = _build_where("Rishit", "WhatsApp Chat with Sample Contact")
         assert "$and" in result
         # The sender condition is simple
         assert result["$and"][0] == {"sender": {"$eq": "Rishit"}}
@@ -161,8 +161,8 @@ class TestHelpers:
         chat_clause = result["$and"][1]
         assert "$or" in chat_clause
         branch_values = [b["chat_name"]["$eq"] for b in chat_clause["$or"]]
-        assert "Vibhu Kakkar" in branch_values
-        assert "WhatsApp Chat with Vibhu Kakkar" in branch_values
+        assert "Sample Contact" in branch_values
+        assert "WhatsApp Chat with Sample Contact" in branch_values
 
 
 # ── PersonaStore ───────────────────────────────────────────────────────────────
@@ -340,8 +340,8 @@ class TestLegacyPrefixCompatibility:
     prefixes in chat_name metadata returned zero results silently.
 
     Root cause: _build_where used strict equality on chat_name.  If stored
-    metadata had ''WhatsApp Chat with Vibhu Kakkar'' but the user typed
-    ''Vibhu Kakkar'' (the canonical form), the filter never matched.
+    metadata had ''WhatsApp Chat with Sample Contact'' but the user typed
+    ''Sample Contact'' (the canonical form), the filter never matched.
 
     Fix (bilateral):
       - Write path: _make_metadata normalises chat_name so new records never
@@ -350,7 +350,7 @@ class TestLegacyPrefixCompatibility:
         to match against both the canonical and every legacy-prefixed form.
     """
 
-    def _msg_prefixed(self, sender: str, content: str, chat: str = "WhatsApp Chat with Vibhu Kakkar", **kw) -> MessageRecord:
+    def _msg_prefixed(self, sender: str, content: str, chat: str = "WhatsApp Chat with Sample Contact", **kw) -> MessageRecord:
         """MessageRecord with a legacy-prefixed chat_name (simulates old parser output)."""
         return _msg(sender, content, chat=chat, **kw)
 
@@ -359,12 +359,12 @@ class TestLegacyPrefixCompatibility:
         _make_metadata must strip the legacy prefix so stored metadata
         never contains ''WhatsApp Chat with ...''.
         """
-        msg = self._msg_prefixed("Rishit", "hello from prefixed chat", chat="WhatsApp Chat with Vibhu Kakkar")
+        msg = self._msg_prefixed("Rishit", "hello from prefixed chat", chat="WhatsApp Chat with Sample Contact")
         store.add_messages([msg])
         assert store.count() == 1
 
         meta = store.collection.get(include=["metadatas"])["metadatas"][0]
-        assert meta["chat_name"] == "Vibhu Kakkar", \
+        assert meta["chat_name"] == "Sample Contact", \
             f"Expected stripped chat_name, got: {meta['chat_name']}"
 
     def test_query_clean_chat_matches_prefixed_store(self, store):
@@ -375,9 +375,9 @@ class TestLegacyPrefixCompatibility:
         This is the acceptance criterion: len(results) > 0.
         """
         msgs = [
-            self._msg_prefixed("Rishit", "whats the plan for tonight", chat="WhatsApp Chat with Vibhu Kakkar"),
-            self._msg_prefixed("Rishit", "lets meet at 8 pm", chat="WhatsApp Chat with Vibhu Kakkar"),
-            self._msg_prefixed("Rishit", "bro assignment done?", chat="WhatsApp Chat with Vibhu Kakkar"),
+            self._msg_prefixed("Rishit", "whats the plan for tonight", chat="WhatsApp Chat with Sample Contact"),
+            self._msg_prefixed("Rishit", "lets meet at 8 pm", chat="WhatsApp Chat with Sample Contact"),
+            self._msg_prefixed("Rishit", "bro assignment done?", chat="WhatsApp Chat with Sample Contact"),
             self._msg_prefixed("Priya",  "yeah I finished it", chat="WhatsApp Chat with Priya"),
         ]
         store.add_messages(msgs)
@@ -387,7 +387,7 @@ class TestLegacyPrefixCompatibility:
             "what are you doing tonight",
             top_k=5,
             sender_filter="Rishit",
-            chat_filter="Vibhu Kakkar",
+            chat_filter="Sample Contact",
         )
         assert len(results) > 0, \
             f"Bug 2 regression: query with clean chat name returned zero results. Root cause: $or not applied."
@@ -395,8 +395,8 @@ class TestLegacyPrefixCompatibility:
         for r in results:
             assert r["sender"] == "Rishit", \
                 f"sender filter violated: got {r['sender']}"
-            assert r["chat_name"] == "Vibhu Kakkar", \
-                f"chat filter violated: got {r['chat_name']} (expected 'Vibhu Kakkar')"
+            assert r["chat_name"] == "Sample Contact", \
+                f"chat filter violated: got {r['chat_name']} (expected 'Sample Contact')"
 
     def test_query_prefixed_chat_also_matches(self, store):
         """
@@ -413,11 +413,11 @@ class TestLegacyPrefixCompatibility:
             "weekend plans",
             top_k=5,
             sender_filter="Rishit",
-            chat_filter="WhatsApp Chat with Vibhu Kakkar",
+            chat_filter="WhatsApp Chat with Sample Contact",
         )
         assert len(results) > 0
         for r in results:
-            assert r["chat_name"] == "Vibhu Kakkar"
+            assert r["chat_name"] == "Sample Contact"
 
     def test_chat_filter_hybrid_with_legacy_prefix(self, store):
         """retrieve_hybrid must also handle legacy prefixed data."""
@@ -431,31 +431,31 @@ class TestLegacyPrefixCompatibility:
             "whats up",
             top_k=3,
             sender_filter="Rishit",
-            chat_filter="Vibhu Kakkar",
+            chat_filter="Sample Contact",
         )
         assert len(results) > 0
         for r in results:
-            assert r["chat_name"] == "Vibhu Kakkar"
+            assert r["chat_name"] == "Sample Contact"
 
     def test_time_range_with_legacy_prefix(self, store):
         """_retrieve_by_time_range must handle legacy prefixed data."""
         msgs = [
-            self._msg_prefixed("Rishit", "message one", chat="WhatsApp Chat with Vibhu Kakkar", hour=10),
-            self._msg_prefixed("Rishit", "message two", chat="WhatsApp Chat with Vibhu Kakkar", hour=11),
-            self._msg_prefixed("Rishit", "message three", chat="WhatsApp Chat with Vibhu Kakkar", hour=12),
+            self._msg_prefixed("Rishit", "message one", chat="WhatsApp Chat with Sample Contact", hour=10),
+            self._msg_prefixed("Rishit", "message two", chat="WhatsApp Chat with Sample Contact", hour=11),
+            self._msg_prefixed("Rishit", "message three", chat="WhatsApp Chat with Sample Contact", hour=12),
         ]
         store.add_messages(msgs)
 
         from datetime import datetime
         anchor = datetime(2024, 1, 1, 11, 0, 0)
         before = store._retrieve_by_time_range(
-            chat_name="Vibhu Kakkar",
+            chat_name="Sample Contact",
             before_ts=anchor,
             after_ts=None,
             limit=5,
         )
         after = store._retrieve_by_time_range(
-            chat_name="Vibhu Kakkar",
+            chat_name="Sample Contact",
             before_ts=None,
             after_ts=anchor,
             limit=5,
@@ -469,15 +469,15 @@ class TestLegacyPrefixCompatibility:
         the canonical and the legacy-prefixed form.
         """
         from brain.memory.store import _build_chat_name_or
-        result = _build_chat_name_or("Vibhu Kakkar")
+        result = _build_chat_name_or("Sample Contact")
         assert "$or" in result
         branches = result["$or"]
         assert len(branches) >= 2, \
             f"Expected at least 2 branches (canonical + prefixed), got {len(branches)}"
         branch_values = [b["chat_name"]["$eq"] for b in branches]
-        assert "Vibhu Kakkar" in branch_values, \
+        assert "Sample Contact" in branch_values, \
             f"Missing canonical form in $or branches: {branch_values}"
-        assert "WhatsApp Chat with Vibhu Kakkar" in branch_values, \
+        assert "WhatsApp Chat with Sample Contact" in branch_values, \
             f"Missing legacy-prefixed form in $or branches: {branch_values}"
 
 

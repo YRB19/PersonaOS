@@ -19,7 +19,7 @@ v2 changes:
     is exactly one source of truth for relationship scoring.
 
 Usage:
-    python scripts/analyze_signals.py "data/exports/WhatsApp Chat with Shreyansh.txt" --you "Rishit Babbar"
+    python scripts/analyze_signals.py "data/exports/WhatsApp Chat with Sample Contact Seven.txt" --you "Rishit Babbar"
     python scripts/analyze_signals.py data/exports/ --you "Rishit Babbar"   # all files
 """
 import sys

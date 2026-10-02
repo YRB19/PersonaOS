@@ -293,7 +293,7 @@ def signals(
 
     Example:
         python -m cli.main signals "data/exports/chat.txt" --you "Rishit Babbar"
-        python -m cli.main signals "data/exports/chat.txt" --you "Rishit Babbar" --contact "Dhaval Sethi"
+        python -m cli.main signals "data/exports/chat.txt" --you "Rishit Babbar" --contact "Sample Contact Two"
     """
     from brain.profiler.classifier import get_all_scores
     from brain.profiler.analyzer import _group_by_contact
@@ -661,9 +661,9 @@ def reply(
 
     Examples:
         python -m cli.main reply "are you free tonight?" --you "Rishit Babbar" --contact "Priya"
-        python -m cli.main reply "bhai notes bhej de" --you "Rishit Babbar" --contact "Shreyansh" --num 5
+        python -m cli.main reply "bhai notes bhej de" --you "Rishit Babbar" --contact "Sample Contact Seven" --num 5
         python -m cli.main reply "are you free?" --you "Rishit Babbar" --contact "Priya" --tone funny
-        python -m cli.main reply "notes bhej de" --you "Rishit Babbar" --contact "Shreyansh" --pick 2 --reject 1,3
+        python -m cli.main reply "notes bhej de" --you "Rishit Babbar" --contact "Sample Contact Seven" --pick 2 --reject 1,3
     """
     from brain.memory.store import PersonaStore
     from brain.generator.reply import ReplyGenerator
@@ -895,9 +895,9 @@ def suggest(
     GIF suggestions require TENOR_API_KEY in .env (free, 2 min setup).
 
     Examples:
-        python -m cli.main suggest "lmao bhai 💀" --you "Rishit Babbar" --contact "Shreyansh"
+        python -m cli.main suggest "lmao bhai 💀" --you "Rishit Babbar" --contact "Sample Contact Seven"
         python -m cli.main suggest "you free tonight?" --you "Rishit Babbar" --contact "Priya" --type emoji
-        python -m cli.main suggest "got the placement!!" --you "Rishit Babbar" --contact "Dhaval Sethi" --type gif
+        python -m cli.main suggest "got the placement!!" --you "Rishit Babbar" --contact "Sample Contact Two" --type gif
     """
     from brain.media.emoji_suggester import suggest_reactions
     from brain.media.gif_suggester import search_gifs, build_gif_query

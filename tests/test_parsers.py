@@ -125,25 +125,25 @@ class TestWhatsAppParser:
         """Filename with 'WhatsApp Chat with ' prefix must be stripped."""
         src = FIXTURES_DIR / "sample_whatsapp.txt"
         content = src.read_text(encoding="utf-8")
-        dest = tmp_path / "WhatsApp Chat with Vibhu Kakkar.txt"
+        dest = tmp_path / "WhatsApp Chat with Sample Contact.txt"
         dest.write_text(content, encoding="utf-8")
         records = self.parse(dest)
         assert len(records) > 0
         for r in records:
-            assert r.chat_name == "Vibhu Kakkar", \
-                f"Expected 'Vibhu Kakkar', got '{r.chat_name}'"
+            assert r.chat_name == "Sample Contact", \
+                f"Expected 'Sample Contact', got '{r.chat_name}'"
 
     def test_chat_name_from_filename_without_prefix(self, tmp_path):
         """Filename without prefix must pass through unchanged."""
         src = FIXTURES_DIR / "sample_whatsapp.txt"
         content = src.read_text(encoding="utf-8")
-        dest = tmp_path / "Vibhu Kakkar.txt"
+        dest = tmp_path / "Sample Contact.txt"
         dest.write_text(content, encoding="utf-8")
         records = self.parse(dest)
         assert len(records) > 0
         for r in records:
-            assert r.chat_name == "Vibhu Kakkar", \
-                f"Expected 'Vibhu Kakkar', got '{r.chat_name}'"
+            assert r.chat_name == "Sample Contact", \
+                f"Expected 'Sample Contact', got '{r.chat_name}'"
 
     def test_chat_name_from_filename_case_insensitive_prefix(self, tmp_path):
         """Lowercase prefix variant must also be stripped."""
@@ -158,7 +158,7 @@ class TestWhatsAppParser:
                 f"Expected 'vibhu kakkar', got '{r.chat_name}'"
 
     def test_chat_name_argument_overrides_no_prefix_strip_needed(self, tmp_path):
-        """Explicit chat_name='Vibhu Kakkar' must pass through unchanged."""
+        """Explicit chat_name='Sample Contact' must pass through unchanged."""
         src = FIXTURES_DIR / "sample_whatsapp.txt"
         content = src.read_text(encoding="utf-8")
         dest = tmp_path / "anything.txt"

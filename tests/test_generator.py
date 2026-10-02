@@ -991,7 +991,7 @@ class TestReplyGeneratorIntegration:
         gen    = ReplyGenerator(store, profiles_dir="data/profiles")
         drafts, _ = gen.generate(
             incoming="bhai free hai aaj shaam?",
-            from_contact="Shreyansh",
+            from_contact="Sample Contact Seven",
             user_name="Rishit Babbar",
         )
         print(f"\n\n── Integration test drafts ──")

@@ -140,7 +140,7 @@ python -m cli.main signals "data/exports/chat.txt" --you "Rishit Babbar"
 ```
 
 ```bash
-python -m cli.main signals "data/exports/chat.txt" --you "Rishit Babbar" --contact "Dhaval Sethi"
+python -m cli.main signals "data/exports/chat.txt" --you "Rishit Babbar" --contact "Sample Contact Two"
 ```
 
 ---
@@ -297,7 +297,7 @@ python -m cli.main reply "are you free tonight?" --you "Rishit Babbar" --contact
 ```
 
 ```bash
-python -m cli.main reply "bhai notes bhej de" --you "Rishit Babbar" --contact "Shreyansh" --num 5
+python -m cli.main reply "bhai notes bhej de" --you "Rishit Babbar" --contact "Sample Contact Seven" --num 5
 ```
 
 ```bash
@@ -305,7 +305,7 @@ python -m cli.main reply "are you free?" --you "Rishit Babbar" --contact "Priya"
 ```
 
 ```bash
-python -m cli.main reply "notes bhej de" --you "Rishit Babbar" --contact "Shreyansh" --pick 2 --reject 1,3
+python -m cli.main reply "notes bhej de" --you "Rishit Babbar" --contact "Sample Contact Seven" --pick 2 --reject 1,3
 ```
 
 ```bash
@@ -338,7 +338,7 @@ Emoji suggestions are fully local (no API required). GIF suggestions require a `
 ### Examples
 
 ```bash
-python -m cli.main suggest "lmao bhai 💀" --you "Rishit Babbar" --contact "Shreyansh"
+python -m cli.main suggest "lmao bhai 💀" --you "Rishit Babbar" --contact "Sample Contact Seven"
 ```
 
 Emoji only (no Tenor key needed):
@@ -350,7 +350,7 @@ python -m cli.main suggest "you free tonight?" --you "Rishit Babbar" --contact "
 GIF only (requires `TENOR_API_KEY`):
 
 ```bash
-python -m cli.main suggest "got the placement!!" --you "Rishit Babbar" --contact "Dhaval Sethi" --type gif
+python -m cli.main suggest "got the placement!!" --you "Rishit Babbar" --contact "Sample Contact Two" --type gif
 ```
 
 ---
@@ -450,7 +450,7 @@ Relationship signal analysis without the full CLI interface. Uses the same class
 ### Usage
 
 ```bash
-python scripts/analyze_signals.py "data/exports/WhatsApp Chat with Shreyansh.txt" --you "Rishit Babbar"
+python scripts/analyze_signals.py "data/exports/WhatsApp Chat with Sample Contact Seven.txt" --you "Rishit Babbar"
 ```
 
 ```bash

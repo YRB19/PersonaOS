@@ -291,7 +291,7 @@ class TestReplyEndpoint:
         c, _ = client
         data = c.post("/suggest/reply", json={
             "incoming": "bhai kya scene hai",
-            "from_contact": "Shreyansh",
+            "from_contact": "Sample Contact Seven",
             "user_name": "Rishit Babbar",
         }).json()
         assert "drafts" in data
@@ -378,7 +378,7 @@ class TestReplyEndpoint:
         c, _ = client
         data = c.post("/suggest/reply", json={
             "incoming": "bhai free hai kal?",
-            "from_contact": "Shreyansh",
+            "from_contact": "Sample Contact Seven",
             "user_name": "Rishit Babbar",
         }).json()
         expl = data["explainability"]
@@ -395,7 +395,7 @@ class TestReplyEndpoint:
         gen_mock.generate.return_value = (["a", "b"], expected)
         data = c.post("/suggest/reply", json={
             "incoming": "bhai kya scene hai",
-            "from_contact": "Shreyansh",
+            "from_contact": "Sample Contact Seven",
             "user_name": "Rishit Babbar",
         }).json()
         assert data["drafts"] == ["a", "b"]
@@ -525,7 +525,7 @@ class TestReplyEndpointIntegration:
         with TestClient(app) as c:
             r = c.post("/suggest/reply", json={
                 "incoming": "bhai free hai kal?",
-                "from_contact": "Shreyansh",
+                "from_contact": "Sample Contact Seven",
                 "user_name": "Rishit Babbar",
             })
             assert r.status_code == 200

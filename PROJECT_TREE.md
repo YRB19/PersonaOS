@@ -47,16 +47,16 @@ PersonaOS/
 │       └── rishit_babbar.json (19KB)
 ├── data/
 │   ├── exports/                          # 10 WhatsApp exports (853KB total)
-│   │   ├── WhatsApp Chat with Anmoli & Chthi.txt (86KB)
-│   │   ├── WhatsApp Chat with Devanshi.txt (73KB)
-│   │   ├── WhatsApp Chat with Dhaval Sethi.txt (14KB)
-│   │   ├── WhatsApp Chat with Girliesssq.txt (152KB)
+│   │   ├── WhatsApp Chat with Sample Contact Five & Chthi.txt (86KB)
+│   │   ├── WhatsApp Chat with Sample Contact Three.txt (73KB)
+│   │   ├── WhatsApp Chat with Sample Contact Two.txt (14KB)
+│   │   ├── WhatsApp Chat with Sample Contact Six.txt (152KB)
 │   │   ├── WhatsApp Chat with Machines.txt (49KB)
-│   │   ├── WhatsApp Chat with POD.txt (75KB)
-│   │   ├── WhatsApp Chat with Prathamica.txt (227KB)
-│   │   ├── WhatsApp Chat with Shreyansh.txt (56KB)
-│   │   ├── WhatsApp Chat with VIBE CODING.txt (257KB)
-│   │   └── WhatsApp Chat with Vibhu Kakkar.txt (309KB)
+│   │   ├── WhatsApp Chat with Sample Contact Eight.txt (75KB)
+│   │   ├── WhatsApp Chat with Sample Contact Four.txt (227KB)
+│   │   ├── WhatsApp Chat with Sample Contact Seven.txt (56KB)
+│   │   ├── WhatsApp Chat with Sample Group Nine.txt (257KB)
+│   │   └── WhatsApp Chat with Sample Contact.txt (309KB)
 │   ├── profiles/
 │   │   ├── .DS_Store (6KB)
 │   │   ├── card_b_backup.txt (5KB)
@@ -106,7 +106,7 @@ PersonaOS/
 | 43.2KB | brain/generator/reply.py |
 | 34.9KB | PersonaOS_ProjectPlan.md |
 | 33.0KB | brain/profiler/signals.py |
-| 25.6KB | data/exports/WhatsApp Chat with Prathamica.txt |
+| 25.6KB | data/exports/WhatsApp Chat with Sample Contact Four.txt |
 | 24.7KB | tests/test_parsers.py |
 | 24.4KB | brain/memory/store.py |
 | 22.6KB | tests/test_intent_sensors.py |
@@ -121,7 +121,7 @@ PersonaOS/
 | 16.4KB | tests/test_signals.py |
 | 15.9KB | brain/generator/intent_sensors.py |
 | 15.3KB | COMMANDS.md |
-| 14.9KB | data/exports/WhatsApp Chat with VIBE CODING.txt |
+| 14.9KB | data/exports/WhatsApp Chat with Sample Group Nine.txt |
 | 14.4KB | tests/test_api.py |
 | 13.3KB | project_state.txt |
 | 9.8KB  | api/server.py |
@@ -195,7 +195,7 @@ PersonaOS/
 
 ## Data Health
 
-- **10 WhatsApp exports** parsed successfully (smoke test: 692 messages from POD chat)
+- **10 WhatsApp exports** parsed successfully (smoke test: 692 messages from Sample Contact Eight chat)
 - **1 saved profile** (rishit_babbar.json, 19KB)
 - **ChromaDB** initialized with 7 collections (~7MB each)
 
@@ -211,7 +211,7 @@ python -m cli.main profile "Rishit Babbar"
 python -m cli.main summary "Rishit Babbar"
 
 # Draft a reply
-PERSONA_DEBUG=1 python -m cli.main reply "Hey what's up?" --you "Rishit Babbar" --contact "VIBE CODING"
+PERSONA_DEBUG=1 python -m cli.main reply "Hey what's up?" --you "Rishit Babbar" --contact "Sample Group Nine"
 
 # Search vector store
 python -m cli.main search "meeting" --you "Rishit Babbar"

@@ -13,6 +13,7 @@ data/exports/
 data/profiles/
 data/db/
 custom/profiles/
+# Bug reports paste terminal transcripts + real contact names. Local only.
 bugs.md
 
 # Environment

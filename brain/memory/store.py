@@ -621,7 +621,7 @@ def _make_metadata(record: MessageRecord) -> dict:
     ChromaDB metadata values must be str, int, float, or bool.
 
     chat_name is normalised at write time so legacy prefixes (e.g.
-    'WhatsApp Chat with Vibhu Kakkar') never reach ChromaDB metadata.
+    'WhatsApp Chat with Sample Contact') never reach ChromaDB metadata.
     This guarantees query-time filters built from canonical names will
     always match — no silent zero-results regression even for pre-clear
     data that the parser may have left with the full filename prefix.
@@ -655,7 +655,7 @@ def _build_where(
 
     chat_filter uses an $or clause that matches against both the canonical
     stripped name AND the legacy prefixed form (e.g. 'WhatsApp Chat with
-    Vibhu Kakkar'). This guarantees queries work regardless of whether the
+    Sample Contact'). This guarantees queries work regardless of whether the
     stored metadata was written before or after the write-time prefix-strip
     fix landed. Once all data has been rebuilt with --clear the prefixed
     branch becomes effectively dead but costs nothing at query time.
@@ -679,10 +679,10 @@ def _build_chat_name_or(canonical: str) -> dict:
     Build a ChromaDB $or filter that matches chat_name against both the
     canonical stripped form AND every legacy prefixed variant.
 
-    Example for canonical='Vibhu Kakkar':
+    Example for canonical='Sample Contact':
         {"$or": [
-            {"chat_name": {"$eq": "Vibhu Kakkar"}},
-            {"chat_name": {"$eq": "WhatsApp Chat with Vibhu Kakkar"}},
+            {"chat_name": {"$eq": "Sample Contact"}},
+            {"chat_name": {"$eq": "WhatsApp Chat with Sample Contact"}},
         ]}
 
     ChromaDB evaluates $or as a logical disjunction — satisfies if ANY

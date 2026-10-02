@@ -18,7 +18,7 @@ Last commit: **2026-07-26** (`5a5a6e1`). Working tree is **clean**, branch `mast
 | 5 | "Dev" → family misclassification | ✅ Fixed | `9a3bf01`: honorific terms (bhaiya) no longer override professional-topic signals; +273 lines of tests |
 | 6 | Git hygiene | ✅ Fixed | `.gitignore` hardened, duplicate `custom/profiles/rishit_babbar.json` deleted, no `data/` or `custom/` files tracked |
 
-**Caveat on #2:** the fix is verified by unit tests, but nobody has re-run your original repro (`python -m cli.main search "plans for the weekend" --you "Rishit Babbar" --chat "Vibhu Kakkar"`) against your real 4,130-message store. A silent-failure bug isn't closed until the real query returns results. Existing stores written under the old naming may also need a re-ingest.
+**Caveat on #2:** the fix is verified by unit tests, but nobody has re-run your original repro (`python -m cli.main search "plans for the weekend" --you "Rishit Babbar" --chat "Sample Contact"`) against your real 4,130-message store. A silent-failure bug isn't closed until the real query returns results. Existing stores written under the old naming may also need a re-ingest.
 
 ### Test run (my sandbox, sentence-transformers stubbed, no Ollama)
 
