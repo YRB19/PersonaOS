@@ -13,7 +13,8 @@ data/exports/
 data/profiles/
 data/db/
 custom/profiles/
-bugs
+bugs.md
+bugs.txt
 
 # Environment
 .env
