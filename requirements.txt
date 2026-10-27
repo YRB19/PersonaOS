@@ -13,7 +13,7 @@ ollama                   # Python client for your local Ollama
 sentence-transformers    # Local text embeddings, no API needed
 
 # ── Vector DB ─────────────────────────────────────────────────────────────────
-chromadb                 # Local vector store, SQLite-backed
+chromadb                 # Local vector store, SQLite-backed    
 
 # ── Text utilities ─────────────────────────────────────────────────────────────
 emoji                    # Emoji detection and analysis
